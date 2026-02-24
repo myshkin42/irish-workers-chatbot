@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+venv/
+.venv/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Build outputs
+.next/
+__pycache__/
+*.pyc
+*.egg-info/
+
+# Data (too large for git, vectors already in Pinecone)
+data/documents/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
