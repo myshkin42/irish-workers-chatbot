@@ -93,6 +93,44 @@ def check_input_safety(message: str) -> tuple[bool, str | None]:
     
     return True, None
 
+
+# Greeting and meta-question detection
+# These don't need retrieval — handle them directly to save embedding costs
+GREETING_PATTERNS = [
+    "hello", "hi", "hey", "howdy", "good morning", "good afternoon",
+    "good evening", "hiya", "greetings", "sup", "yo",
+]
+
+META_PATTERNS = [
+    "who are you", "what are you", "what can you do", "how do you work",
+    "what is this", "what do you do", "help me", "can you help",
+    "what can i ask", "what topics",
+]
+
+GREETING_RESPONSE = (
+    "Hello! I'm the Irish Workers' Rights Chatbot. I can help you with questions about "
+    "your employment rights in Ireland — things like pay, working hours, leave, unfair dismissal, "
+    "discrimination, redundancy, and how to make a complaint to the WRC.\n\n"
+    "What would you like to know about?"
+)
+
+def check_greeting_or_meta(message: str) -> str | None:
+    """
+    Check if the message is a greeting or meta-question about the chatbot.
+    Returns a response string if matched, None otherwise.
+    """
+    lower = message.strip().lower().rstrip("?!.")
+    
+    # Exact or near-exact greeting
+    if lower in GREETING_PATTERNS or any(lower.startswith(g) for g in GREETING_PATTERNS):
+        return GREETING_RESPONSE
+    
+    # Meta questions about the chatbot
+    if any(p in lower for p in META_PATTERNS):
+        return GREETING_RESPONSE
+    
+    return None
+
 # ----------------------------------------------------------------------------
 # Configuration
 # ----------------------------------------------------------------------------
@@ -557,6 +595,17 @@ async def chat(
             answer="I'm here to help with Irish employment law. What would you like to know about your workplace rights?",
             sources=[],
             official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]]
+        )
+    
+    # Greeting/meta check — skip retrieval entirely for greetings
+    greeting_response = check_greeting_or_meta(payload.message)
+    if greeting_response:
+        print(f"[GREETING] Matched: '{payload.message[:30]}'")
+        return ChatResponse(
+            answer=greeting_response,
+            sources=[],
+            official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
+            has_authoritative_sources=True  # Don't show the warning banner
         )
     
     try:
