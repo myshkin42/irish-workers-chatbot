@@ -9,6 +9,10 @@ primary_region = 'lhr'
 [build]
   dockerfile = 'Dockerfile'
 
+[mounts]
+  source = 'chatbot_logs'
+  destination = '/data/logs'
+
 [env]
   ENVIRONMENT = 'production'
   PORT = '8080'

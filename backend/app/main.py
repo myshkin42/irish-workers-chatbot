@@ -21,8 +21,36 @@ from slowapi import Limiter
 from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
+import json
+
 from .system_prompt import SYSTEM_PROMPT
 from .query_preprocessing import preprocess_query
+
+# ----------------------------------------------------------------------------
+# Query Logging
+# ----------------------------------------------------------------------------
+LOG_DIR = Path("/data/logs")
+
+def log_query(message: str, answer: str, sources: list, best_score: float,
+              tier: str, has_good_sources: bool, context_used: str = None):
+    """Log query and response to a JSON lines file. One line per interaction."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_file = LOG_DIR / "queries.jsonl"
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": message,
+            "answer": answer[:500],  # Truncate to keep logs manageable
+            "sources": [s.get("title", "?") for s in sources[:3]],
+            "best_score": round(best_score, 3),
+            "tier": tier,
+            "has_good_sources": has_good_sources,
+            "context_query": context_used,
+        }
+        with open(log_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+    except Exception as e:
+        print(f"[LOG] Failed to write log: {e}")
 
 # ----------------------------------------------------------------------------
 # Security & Metadata
@@ -666,6 +694,7 @@ async def chat(
     greeting_response = check_greeting_or_meta(payload.message)
     if greeting_response:
         print(f"[GREETING] Matched: '{payload.message[:30]}'")
+        log_query(payload.message, greeting_response, [], 0.0, "greeting", True)
         return ChatResponse(
             answer=greeting_response,
             sources=[],
@@ -691,8 +720,10 @@ async def chat(
         #    (no point re-ranking or rewriting if nothing is even close)
         if best_raw_score < TIER2_FLOOR:
             print(f"[TIER3] Score {best_raw_score:.3f} below floor - asking for clarification")
+            clarification = "I'd like to help, but could you give me a bit more detail about your situation? For example, are you asking about pay, working hours, leave, dismissal, or something else? The more specific you can be, the better I can point you to the right information."
+            log_query(payload.message, clarification, [], best_raw_score, "tier3", False, context_used=contextual_message if contextual_message != payload.message else None)
             return ChatResponse(
-                answer="I'd like to help, but could you give me a bit more detail about your situation? For example, are you asking about pay, working hours, leave, dismissal, or something else? The more specific you can be, the better I can point you to the right information.",
+                answer=clarification,
                 sources=[],
                 official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
                 has_authoritative_sources=False
@@ -749,6 +780,15 @@ async def chat(
         # 10. Select relevant official links based on query content
         official_links = select_official_links(payload.message)
         
+        # 11. Log the query and response
+        tier = "tier1" if has_good_sources else "tier2"
+        log_query(
+            payload.message, answer, sources,
+            best_score=matches[0]["score"] if matches else 0.0,
+            tier=tier, has_good_sources=has_good_sources,
+            context_used=contextual_message if contextual_message != payload.message else None
+        )
+        
         return ChatResponse(
             answer=answer, 
             sources=sources,
@@ -759,6 +799,27 @@ async def chat(
     except Exception as e:
         print(f"Chat error: {e}")
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)[:100]}")
+
+
+@app.get("/logs")
+async def get_logs(n: int = 50, _: bool = Depends(verify_token)):
+    """View recent query logs. Returns last n entries."""
+    log_file = LOG_DIR / "queries.jsonl"
+    if not log_file.exists():
+        return {"entries": [], "total": 0}
+    
+    with open(log_file, "r") as f:
+        lines = f.readlines()
+    
+    # Return last n entries, newest first
+    entries = []
+    for line in reversed(lines[-n:]):
+        try:
+            entries.append(json.loads(line.strip()))
+        except json.JSONDecodeError:
+            continue
+    
+    return {"entries": entries, "total": len(lines)}
 
 
 @app.get("/namespaces")
