@@ -243,6 +243,71 @@ async def get_embedding(text: str) -> List[float]:
 TIER2_FLOOR = 0.45  # Below this, query is too vague - ask for clarification
 
 
+def build_contextual_query(message: str, history: List[Message]) -> str:
+    """
+    Build a context-aware search query when the current message looks
+    like a follow-up to a previous exchange.
+    
+    Examples:
+      - "I am a 20 year old apprentice" after "what is the minimum wage?"
+        → "I am a 20 year old apprentice minimum wage"
+      - "what about part-time?" after discussing annual leave
+        → "what about part-time? annual leave"
+    
+    Only activates when the message is likely a follow-up (short, personal
+    statement, contains pronouns/context words, etc.) AND there's recent
+    history to draw from.
+    """
+    if not history or len(history) < 2:
+        return message
+    
+    lower = message.strip().lower()
+    
+    # Signals that this is a follow-up, not a standalone question
+    follow_up_signals = [
+        len(lower.split()) <= 12,                    # Short message
+        lower.startswith(("i am", "i'm", "im ", "my ", "what about", "and ", "but ",
+                          "also", "how about", "what if", "does that", "is that",
+                          "same for", "do i", "can i", "am i")),
+        "?" not in message and len(lower.split()) <= 8,  # Statement, not question, and short
+    ]
+    
+    if not any(follow_up_signals):
+        return message
+    
+    # Find the last user message from history to get the topic
+    last_user_msg = None
+    for msg in reversed(history):
+        if msg.role == "user":
+            last_user_msg = msg.content
+            break
+    
+    if not last_user_msg:
+        return message
+    
+    # Extract key topic words from the previous question
+    # (strip stopwords to get the core topic)
+    stopwords = {"i", "am", "a", "an", "the", "is", "was", "are", "were", "my",
+                 "me", "do", "does", "did", "can", "could", "will", "would",
+                 "what", "how", "who", "when", "where", "why", "in", "on",
+                 "at", "to", "for", "of", "it", "if", "about", "get", "have",
+                 "has", "had", "that", "this", "there", "be", "been", "being",
+                 "im", "ive", "youre"}
+    
+    prev_words = last_user_msg.lower().split()
+    topic_words = [w.strip("?.,!") for w in prev_words if w.strip("?.,!") not in stopwords]
+    
+    if not topic_words:
+        return message
+    
+    # Append topic context to the current message
+    topic_context = " ".join(topic_words[:8])  # Cap at 8 words to avoid dilution
+    contextual_query = f"{message} {topic_context}"
+    print(f"[CONTEXT] Follow-up detected: '{message[:40]}' + topic '{topic_context}'")
+    
+    return contextual_query
+
+
 async def search_knowledge_base(query: str, top_k: int = 6) -> tuple[List[Dict[str, Any]], float]:
     """
     Search Pinecone for relevant documents.
@@ -609,8 +674,11 @@ async def chat(
         )
     
     try:
+        # 0. Build context-aware query for follow-ups
+        contextual_message = build_contextual_query(payload.message, payload.history)
+        
         # 1. Preprocess query (Tier 1: static expansions)
-        enhanced_query, qp_meta = preprocess_query(payload.message)
+        enhanced_query, qp_meta = preprocess_query(contextual_message)
         if qp_meta["was_expanded"]:
             print(f"[QP] {qp_meta['expansions_used']}")
         
