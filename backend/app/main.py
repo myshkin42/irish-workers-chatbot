@@ -142,6 +142,35 @@ GREETING_RESPONSE = (
     "What would you like to know about?"
 )
 
+# Out-of-scope topic detection
+# These are common questions that aren't employment rights — redirect helpfully
+TAX_PATTERNS = [
+    "how much tax", "tax rate", "tax rates", "income tax", "pay tax",
+    "tax band", "tax credit", "tax bracket", "paye", "usc",
+    "universal social charge", "prsi", "tax return", "tax refund",
+    "tax back", "tax relief", "gross to net", "take home pay",
+    "net pay", "after tax",
+]
+
+TAX_RESPONSE = (
+    "Tax is quite individual and depends on your income, marital status, credits, and reliefs — "
+    "so I'm not the best tool for calculating your specific tax.\n\n"
+    "For that, I'd recommend:\n\n"
+    "• **Revenue.ie** — Ireland's tax authority. They have a PAYE calculator and detailed guides for your situation.\n"
+    "• **Citizens Information** (citizensinformation.ie) — plain-language guides on income tax, USC, and PRSI.\n"
+    "• **Your payroll department** — they can explain the deductions on your payslip.\n\n"
+    "If you have a question about your employment rights — like deductions from your wages, "
+    "not getting a payslip, or being underpaid — I can definitely help with that."
+)
+
+def check_out_of_scope(message: str) -> str | None:
+    """Check if the message is about a topic we should redirect rather than retrieve."""
+    lower = message.strip().lower()
+    if any(p in lower for p in TAX_PATTERNS):
+        return TAX_RESPONSE
+    return None
+
+
 def check_greeting_or_meta(message: str) -> str | None:
     """
     Check if the message is a greeting or meta-question about the chatbot.
@@ -697,6 +726,18 @@ async def chat(
         log_query(payload.message, greeting_response, [], 0.0, "greeting", True)
         return ChatResponse(
             answer=greeting_response,
+            sources=[],
+            official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
+            has_authoritative_sources=True  # Don't show the warning banner
+        )
+    
+    # Out-of-scope check — redirect common non-employment-rights questions
+    oos_response = check_out_of_scope(payload.message)
+    if oos_response:
+        print(f"[OUT-OF-SCOPE] Matched: '{payload.message[:30]}'")
+        log_query(payload.message, oos_response, [], 0.0, "out-of-scope", True)
+        return ChatResponse(
+            answer=oos_response,
             sources=[],
             official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
             has_authoritative_sources=True  # Don't show the warning banner
