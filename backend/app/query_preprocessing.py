@@ -123,6 +123,11 @@ _CONVERSATIONAL_RAW: List[Tuple[str, str, str]] = [
     (r'\b(because of my religion)\b', 'religion discrimination employment equality act', 'religion-discrimination'),
     (r'\b(traveller)\b', 'traveller community membership discrimination employment equality', 'traveller'),
     (r'\b(equal pay)\b', 'equal pay equal remuneration employment equality act', 'equal-pay'),
+    # Protected grounds - disclosure / interview questions
+    (r'\b(marital status|married|single|divorced|separated)\b', 'marital status discrimination employment equality act nine grounds', 'marital-status'),
+    (r'\b(sexual orientation|gay|lesbian|bisexual|lgbt)\b', 'sexual orientation discrimination employment equality act', 'sexual-orientation'),
+    (r'\b(family status|children|childcare|dependants)\b', 'family status discrimination employment equality act', 'family-status'),
+    (r'\b(disclose|have to tell|obliged to tell|ask me about)\b', 'discrimination employment equality protected grounds employer questions', 'disclose'),
 
     # --- Contracts & Employment Status ---
     (r'\b(no contract|without a contract|no paperwork|no terms)\b', 'terms of employment written statement contract', 'no-contract'),
