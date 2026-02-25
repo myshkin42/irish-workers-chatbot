@@ -842,6 +842,62 @@ async def chat(
         raise HTTPException(status_code=500, detail=f"Error processing request: {str(e)[:100]}")
 
 
+class FeedbackRequest(BaseModel):
+    message: str = Field(..., min_length=1, max_length=4000)
+    answer: str = Field(..., min_length=1, max_length=8000)
+    feedback: str = Field(..., pattern="^(up|down)$")
+
+
+@app.post("/feedback")
+@limiter.limit("30/minute")
+async def submit_feedback(request: Request, payload: FeedbackRequest):
+    """Log user feedback (thumbs up/down) on a response."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_file = LOG_DIR / "feedback.jsonl"
+        entry = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "message": payload.message,
+            "answer": payload.answer[:500],
+            "feedback": payload.feedback,
+        }
+        with open(log_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"[FEEDBACK] Error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to log feedback")
+
+
+@app.get("/feedback/summary")
+async def feedback_summary(_: bool = Depends(verify_token)):
+    """View feedback log."""
+    log_file = LOG_DIR / "feedback.jsonl"
+    if not log_file.exists():
+        return {"entries": [], "total": 0, "thumbs_up": 0, "thumbs_down": 0}
+    
+    with open(log_file, "r") as f:
+        lines = f.readlines()
+    
+    entries = []
+    up = 0
+    down = 0
+    for line in lines:
+        try:
+            entry = json.loads(line.strip())
+            entries.append(entry)
+            if entry.get("feedback") == "up":
+                up += 1
+            else:
+                down += 1
+        except json.JSONDecodeError:
+            continue
+    
+    # Return newest first
+    entries.reverse()
+    return {"entries": entries[:100], "total": len(entries), "thumbs_up": up, "thumbs_down": down}
+
+
 @app.get("/logs")
 async def get_logs(n: int = 50, _: bool = Depends(verify_token)):
     """View recent query logs. Returns last n entries."""

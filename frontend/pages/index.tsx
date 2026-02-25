@@ -45,6 +45,7 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [feedback, setFeedback] = useState<Record<number, 'up' | 'down'>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Fetch metadata on mount
@@ -113,6 +114,29 @@ export default function Home() {
       }]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const sendFeedback = async (messageIndex: number, type: 'up' | 'down') => {
+    // Find the user message that preceded this assistant message
+    const assistantMsg = messages[messageIndex];
+    const userMsg = messages[messageIndex - 1];
+    if (!userMsg || !assistantMsg) return;
+
+    setFeedback(prev => ({ ...prev, [messageIndex]: type }));
+
+    try {
+      await fetch(`${API_URL}/feedback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userMsg.content,
+          answer: assistantMsg.content,
+          feedback: type
+        })
+      });
+    } catch (error) {
+      console.error('Feedback error:', error);
     }
   };
 
@@ -267,6 +291,30 @@ export default function Home() {
                         </a>
                       ))}
                     </small>
+                  </div>
+                )}
+
+                {msg.role === 'assistant' && i > 0 && (
+                  <div className="feedback-buttons">
+                    {feedback[i] ? (
+                      <span className="feedback-thanks">
+                        {feedback[i] === 'up' ? '👍' : '👎'} Thanks for your feedback
+                      </span>
+                    ) : (
+                      <>
+                        <span className="feedback-label">Was this helpful?</span>
+                        <button
+                          className="feedback-btn"
+                          onClick={() => sendFeedback(i, 'up')}
+                          aria-label="Thumbs up"
+                        >👍</button>
+                        <button
+                          className="feedback-btn"
+                          onClick={() => sendFeedback(i, 'down')}
+                          aria-label="Thumbs down"
+                        >👎</button>
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -571,6 +619,38 @@ export default function Home() {
         .message-links a {
           margin-right: 10px;
           color: #0d6efd;
+        }
+
+        /* Feedback buttons */
+        .feedback-buttons {
+          margin-top: 8px;
+          padding-top: 8px;
+          border-top: 1px solid #dee2e6;
+          display: flex;
+          align-items: center;
+          gap: 6px;
+        }
+        .feedback-label {
+          font-size: 12px;
+          color: #6c757d;
+        }
+        .feedback-btn {
+          background: none;
+          border: 1px solid #dee2e6;
+          border-radius: 4px;
+          padding: 2px 8px;
+          font-size: 16px;
+          cursor: pointer;
+          line-height: 1.4;
+          transition: background 0.15s, border-color 0.15s;
+        }
+        .feedback-btn:hover {
+          background: #e9ecef;
+          border-color: #adb5bd;
+        }
+        .feedback-thanks {
+          font-size: 12px;
+          color: #6c757d;
         }
 
         /* ===========================
