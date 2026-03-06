@@ -164,6 +164,9 @@ _CONVERSATIONAL_RAW: List[Tuple[str, str, str]] = [
     (r'\b(join a union|get a union)\b', 'trade union membership right to organise', 'join-union'),
     (r'\b(union rep|shop steward)\b', 'trade union representative collective bargaining', 'union-rep'),
 
+    # --- Surveillance / Data Protection ---
+    (r'\b(record|recording|recorded|monitor|monitoring|surveillance|cctv|camera|tracking|spying)\b', 'surveillance monitoring data protection privacy workplace gdpr', 'surveillance'),
+
     # --- Flexible / Remote Work ---
     (r'\b(work from home|wfh|remote work)\b', 'flexible working remote working right to request code of practice', 'remote'),
     (r'\b(flexible hours|flexible working)\b', 'flexible working right to request work life balance act', 'flexible'),
