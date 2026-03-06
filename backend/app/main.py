@@ -58,7 +58,7 @@ def log_query(message: str, answer: str, sources: list, best_score: float,
 
 # Knowledge base metadata - update when you re-ingest documents
 KNOWLEDGE_BASE_VERSION = "1.0.0"
-KNOWLEDGE_BASE_UPDATED = "2026-02-01"  # Update this after each ingestion
+KNOWLEDGE_BASE_UPDATED = "2026-03-06"  # Update this after each ingestion
 
 # Official sources to reference
 OFFICIAL_SOURCES = {
@@ -320,16 +320,19 @@ def build_contextual_query(message: str, history: List[Message]) -> str:
     
     lower = message.strip().lower()
     
-    # Signals that this is a follow-up, not a standalone question
+    # Signals that this is a follow-up, not a standalone question.
+    # We require 2+ signals to trigger, so standalone questions like
+    # "Can I be required to wear high heels?" (long + has '?') don't
+    # accidentally pick up context from the previous exchange.
     follow_up_signals = [
-        len(lower.split()) <= 12,                    # Short message
+        len(lower.split()) <= 4,                     # Very short message (bare topic or fragment)
         lower.startswith(("i am", "i'm", "im ", "my ", "what about", "and ", "but ",
                           "also", "how about", "what if", "does that", "is that",
-                          "same for", "do i", "can i", "am i")),
+                          "same for")),              # Ambiguous starters only
         "?" not in message and len(lower.split()) <= 8,  # Statement, not question, and short
     ]
     
-    if not any(follow_up_signals):
+    if sum(follow_up_signals) < 2:
         return message
     
     # Find the last user message from history to get the topic

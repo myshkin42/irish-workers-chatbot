@@ -214,7 +214,7 @@ def reingest_document(
         text = path.read_text(encoding="utf-8", errors="ignore")
         # Simple chunking by ~500 words
         words = text.split()
-        chunk_size = 500
+        chunk_size = 400
         overlap = 50
         chunks = []
         for i in range(0, len(words), chunk_size - overlap):
