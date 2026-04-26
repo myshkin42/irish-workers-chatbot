@@ -23,6 +23,38 @@ interface Message {
   sources?: Array<{ title: string; doc_type?: string; section?: string; relevance?: number }>;
   officialLinks?: Array<{ name: string; url: string; description: string }>;
   hasAuthoritativeSources?: boolean;
+  isLookupOpener?: boolean;
+}
+
+interface CompanyRecord {
+  source: 'hsa' | 'wrc';
+  company_name: string;
+  matched_as: 'defendant' | 'mention';
+  case_number?: string | null;
+  case_category?: string | null;
+  date?: string | null;
+  court?: string | null;
+  outcome?: string | null;
+  outcome_status?: 'confirmed' | 'not_extracted' | 'not_applicable';
+  fine_amount?: number | null;
+  legislation?: string[];
+  url?: string | null;
+  confidence: 'high' | 'medium' | 'low';
+  disclaimer?: string | null;
+}
+
+interface CompanyCheckResult {
+  company: string;
+  summary: {
+    total_records: number;
+    hsa_prosecutions: number;
+    wrc_decisions: number;
+    labour_court_records: number;
+  };
+  source_status: Record<string, string>;
+  partial_results: boolean;
+  records: CompanyRecord[];
+  warnings: string[];
 }
 
 interface Metadata {
@@ -46,7 +78,16 @@ export default function Home() {
   const [metadata, setMetadata] = useState<Metadata | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [feedback, setFeedback] = useState<Record<number, 'up' | 'down'>>({});
+  const [mode, setMode] = useState<'chat' | 'company'>('chat');
+  const [companyName, setCompanyName] = useState('');
+  const [includeMentions, setIncludeMentions] = useState(false);
+  const [companyLoading, setCompanyLoading] = useState(false);
+  const [companyError, setCompanyError] = useState('');
+  const [companyResult, setCompanyResult] = useState<CompanyCheckResult | null>(null);
+  const [lookupId, setLookupId] = useState<string | null>(null);
+  const [lookupExpired, setLookupExpired] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Fetch metadata on mount
   useEffect(() => {
@@ -81,7 +122,7 @@ export default function Home() {
     setLoading(true);
 
     try {
-      const history = messages.slice(-10).map(m => ({
+      const history = messages.filter(m => !m.isLookupOpener).slice(-10).map(m => ({
         role: m.role,
         content: m.content
       }));
@@ -91,11 +132,17 @@ export default function Home() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: input,
-          history
+          history,
+          lookup_id: lookupId
         })
       });
 
       const data = await response.json();
+
+      if (data.lookup_context_expired) {
+        setLookupExpired(true);
+        setLookupId(null);
+      }
 
       const assistantMessage: Message = {
         role: 'assistant',
@@ -116,6 +163,74 @@ export default function Home() {
       setLoading(false);
     }
   };
+
+  const startFresh = () => {
+    setMessages([]);
+    setInput('');
+    setLookupId(null);
+    setLookupExpired(false);
+    setFeedback({});
+  };
+
+  const runCompanyCheck = async () => {
+    if (!companyName.trim() || companyLoading) return;
+
+    setCompanyLoading(true);
+    setCompanyError('');
+    setCompanyResult(null);
+
+    try {
+      const response = await fetch(`${API_URL}/api/company-check`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company: companyName.trim(),
+          include_mentions: includeMentions,
+          limit: 10
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data.detail || 'Lookup service is temporarily unavailable');
+      }
+
+      setLookupId(data.lookup_id);
+      setCompanyResult(data.result);
+      setLookupExpired(false);
+    } catch (error) {
+      console.error('Company check error:', error);
+      setCompanyError(error instanceof Error ? error.message : 'Lookup service is temporarily unavailable');
+    } finally {
+      setCompanyLoading(false);
+    }
+  };
+
+  const openChatWithResults = () => {
+    if (!companyResult || !lookupId) return;
+
+    const wrc = companyResult.summary.wrc_decisions || 0;
+    const hsa = companyResult.summary.hsa_prosecutions || 0;
+    setMode('chat');
+    setLookupExpired(false);
+    setMessages(prev => [
+      ...prev,
+      {
+        role: 'assistant',
+        content: `I can see the records you just looked up for **${companyResult.company}** (${wrc} WRC cases, ${hsa} HSA prosecutions). What would you like to ask about them?`,
+        hasAuthoritativeSources: true,
+        isLookupOpener: true
+      }
+    ]);
+    setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const formatMoney = (amount?: number | null) => {
+    if (!amount) return '';
+    return new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 0 }).format(amount);
+  };
+
+  const isHttpUrl = (url?: string | null) => !!url && /^https?:\/\//i.test(url);
 
   const sendFeedback = async (messageIndex: number, type: 'up' | 'down') => {
     // Find the user message that preceded this assistant message
@@ -160,6 +275,25 @@ export default function Home() {
           </div>
         )}
       </header>
+
+      <div className="mode-toggle-wrap">
+        <div className="mode-toggle" role="tablist" aria-label="Choose chatbot mode">
+          <button
+            className={`mode-tab ${mode === 'chat' ? 'active' : ''}`}
+            onClick={() => setMode('chat')}
+            type="button"
+          >
+            Ask a question
+          </button>
+          <button
+            className={`mode-tab ${mode === 'company' ? 'active' : ''}`}
+            onClick={() => setMode('company')}
+            type="button"
+          >
+            Check a company
+          </button>
+        </div>
+      </div>
 
       <div className="main-layout">
         {/* MOBILE: Sidebar overlay */}
@@ -227,6 +361,21 @@ export default function Home() {
               </svg>
               <span>Resources &amp; Contacts</span>
             </button>
+          </div>
+
+          {mode === 'chat' ? (
+          <>
+          <div className="chat-toolbar">
+            {lookupExpired && (
+              <div className="lookup-expired">
+                Your lookup context has expired. Run a new check to bring those records back into the conversation.
+              </div>
+            )}
+            {(messages.length > 0 || lookupId) && (
+              <button className="start-fresh" onClick={startFresh} type="button">
+                Start fresh
+              </button>
+            )}
           </div>
 
           <div className="messages">
@@ -333,6 +482,7 @@ export default function Home() {
 
           <div className="input-area">
             <input
+              ref={inputRef}
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -344,6 +494,138 @@ export default function Home() {
               Send
             </button>
           </div>
+          </>
+          ) : (
+          <div className="company-panel">
+            <section className="company-info-box">
+              <h2>Check public employer records</h2>
+              <h3>What this check does</h3>
+              <p>
+                This searches public records about Irish employers: prosecutions by the Health and Safety Authority
+                (HSA) and cases filed at the Workplace Relations Commission (WRC).
+              </p>
+              <h3>What it doesn&apos;t do</h3>
+              <p className="company-emphasis">
+                A match means the employer&apos;s name appears in a public record. It does NOT mean the employer broke
+                the law, lost a case, or treated workers badly.
+              </p>
+              <p>
+                WRC search results show that a case was filed. They don&apos;t show what the WRC decided. For the actual
+                outcome, open the linked source record.
+              </p>
+              <h3>Best results</h3>
+              <p>
+                Use the fullest company name you have, for example &quot;Tesco Ireland Limited&quot; rather than &quot;Tesco&quot;.
+                Short or common names can return matches for unrelated employers.
+              </p>
+            </section>
+
+            <section className="company-form">
+              <label htmlFor="company-name">Company or employer name</label>
+              <div className="company-form-row">
+                <input
+                  id="company-name"
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && runCompanyCheck()}
+                  placeholder="e.g. Tesco Ireland Limited"
+                  disabled={companyLoading}
+                />
+                <button onClick={runCompanyCheck} disabled={companyLoading || companyName.trim().length < 2} type="button">
+                  {companyLoading ? 'Checking...' : 'Check'}
+                </button>
+              </div>
+              <label className="mentions-toggle">
+                <input
+                  type="checkbox"
+                  checked={includeMentions}
+                  onChange={(e) => setIncludeMentions(e.target.checked)}
+                  disabled={companyLoading}
+                />
+                Include indirect mentions (slower, more results, more false positives)
+              </label>
+              {companyLoading && <p className="company-loading">Checking public records...</p>}
+              {companyError && <p className="company-error">{companyError}</p>}
+            </section>
+
+            {companyResult && (
+              <section className="company-results">
+                <h2>
+                  Found {companyResult.summary.total_records} public records for &quot;{companyResult.company}&quot;:
+                </h2>
+                <p className="results-summary">
+                  {companyResult.summary.hsa_prosecutions} HSA prosecutions, {companyResult.summary.wrc_decisions} WRC cases.
+                </p>
+                <p className="results-reminder">
+                  Remember: WRC matches mean a case was filed, not that the company lost it. Open each source for the actual decision.
+                </p>
+                {companyResult.partial_results && (
+                  <p className="partial-warning">
+                    Note: one source was unavailable for this lookup. Try again in a moment for a fuller picture.
+                  </p>
+                )}
+
+                <div className="record-list">
+                  {companyResult.records.map((record, i) => (
+                    <article key={`${record.source}-${record.case_number || record.company_name}-${i}`} className={`record-card ${record.source}`}>
+                      <span className={`confidence-badge ${record.confidence}`}>{record.confidence}</span>
+                      {record.source === 'wrc' ? (
+                        <>
+                          <p className="record-kicker">WRC adjudication record - subject not extracted</p>
+                          <h3>{record.company_name}</h3>
+                          <p className="record-meta">
+                            Filed: {record.date || 'Date not shown'}
+                            {record.case_number ? ` - Case ${record.case_number}` : ''}
+                          </p>
+                          <p>
+                            Outcome not extracted by this search. Open the source record to see the WRC&apos;s decision and what the case was about.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <p className="record-kicker">HSA prosecution</p>
+                          <h3>{record.company_name}</h3>
+                          <p className="record-meta">
+                            {record.date || 'Date not shown'}
+                            {record.court ? ` - ${record.court}` : ''}
+                          </p>
+                          {(record.outcome || record.fine_amount) && (
+                            <p>
+                              {record.outcome ? `Outcome: ${record.outcome}. ` : ''}
+                              {record.fine_amount ? `Fine: ${formatMoney(record.fine_amount)}.` : ''}
+                            </p>
+                          )}
+                          {record.legislation && record.legislation.length > 0 && (
+                            <p>Legislation: {record.legislation.join(', ')}</p>
+                          )}
+                        </>
+                      )}
+                      {isHttpUrl(record.url) ? (
+                        <a href={record.url!} target="_blank" rel="noopener noreferrer" className="source-button">
+                          View source record
+                        </a>
+                      ) : (
+                        <p className="source-unavailable">Source record link is not available online for this result.</p>
+                      )}
+                    </article>
+                  ))}
+                </div>
+
+                <div className="chat-bridge">
+                  <h3>Have questions about what these records mean?</h3>
+                  <p>
+                    The chatbot can help explain the records, what the case types involve, and what your options are if
+                    you want to take this further. The chatbot will know about the records you just looked up.
+                  </p>
+                  <button onClick={openChatWithResults} disabled={!lookupId} type="button">
+                    Open chat with these results
+                  </button>
+                </div>
+              </section>
+            )}
+          </div>
+          )}
         </main>
       </div>
 
@@ -403,6 +685,39 @@ export default function Home() {
           font-weight: bold;
           font-size: 13px;
           margin-top: 4px;
+        }
+
+        /* ===========================
+           MODE TOGGLE
+           =========================== */
+        .mode-toggle-wrap {
+          flex-shrink: 0;
+          padding: 10px 16px;
+          background: #ffffff;
+          border-bottom: 1px solid #dee2e6;
+          display: flex;
+          justify-content: center;
+        }
+        .mode-toggle {
+          display: inline-flex;
+          gap: 4px;
+          padding: 4px;
+          background: #eef2f7;
+          border: 1px solid #d8e0ea;
+          border-radius: 8px;
+        }
+        .mode-tab {
+          border: 0;
+          background: transparent;
+          padding: 9px 16px;
+          border-radius: 6px;
+          font-weight: 600;
+          color: #495057;
+          cursor: pointer;
+        }
+        .mode-tab.active {
+          background: #0d6efd;
+          color: white;
         }
 
         /* ===========================
@@ -532,6 +847,37 @@ export default function Home() {
           flex-direction: column;
           min-width: 0;
           min-height: 0;
+        }
+        .chat-toolbar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+          padding: 10px 20px 0;
+          flex-shrink: 0;
+        }
+        .lookup-expired {
+          flex: 1;
+          padding: 8px 12px;
+          background: #fff3cd;
+          border: 1px solid #ffc107;
+          border-radius: 6px;
+          color: #664d03;
+          font-size: 13px;
+        }
+        .start-fresh {
+          border: 1px solid #ced4da;
+          background: white;
+          color: #495057;
+          padding: 8px 12px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-weight: 600;
+          white-space: nowrap;
+        }
+        .start-fresh:hover {
+          border-color: #0d6efd;
+          color: #0d6efd;
         }
         .messages {
           flex: 1;
@@ -701,6 +1047,215 @@ export default function Home() {
         }
 
         /* ===========================
+           COMPANY CHECK
+           =========================== */
+        .company-panel {
+          flex: 1;
+          overflow-y: auto;
+          padding: 20px;
+          background: #f8fafc;
+        }
+        .company-panel section {
+          max-width: 900px;
+          margin: 0 auto 18px;
+        }
+        .company-info-box {
+          background: #eef6ff;
+          border: 1px solid #b9d7f6;
+          border-radius: 8px;
+          padding: 18px;
+          color: #17324d;
+        }
+        .company-info-box h2 {
+          font-size: 22px;
+          margin-bottom: 12px;
+        }
+        .company-info-box h3 {
+          font-size: 14px;
+          margin: 14px 0 6px;
+          color: #0b5a9c;
+        }
+        .company-info-box p {
+          line-height: 1.5;
+          margin-bottom: 8px;
+        }
+        .company-emphasis {
+          font-weight: 700;
+          font-size: 16px;
+        }
+        .company-form {
+          background: white;
+          border: 1px solid #dee2e6;
+          border-radius: 8px;
+          padding: 18px;
+        }
+        .company-form label {
+          display: block;
+          font-weight: 700;
+          margin-bottom: 8px;
+        }
+        .company-form-row {
+          display: flex;
+          gap: 10px;
+        }
+        .company-form-row input {
+          flex: 1;
+          padding: 12px 14px;
+          border: 1px solid #ced4da;
+          border-radius: 8px;
+          font-size: 16px;
+        }
+        .company-form-row input:focus {
+          outline: none;
+          border-color: #0d6efd;
+          box-shadow: 0 0 0 2px rgba(13, 110, 253, 0.15);
+        }
+        .company-form-row button,
+        .chat-bridge button {
+          padding: 12px 18px;
+          background: #0d6efd;
+          border: 0;
+          border-radius: 8px;
+          color: white;
+          font-weight: 700;
+          cursor: pointer;
+        }
+        .company-form-row button:disabled,
+        .chat-bridge button:disabled {
+          background: #6c757d;
+          cursor: not-allowed;
+        }
+        .mentions-toggle {
+          margin-top: 12px;
+          display: flex !important;
+          align-items: flex-start;
+          gap: 8px;
+          font-weight: 500 !important;
+          color: #495057;
+        }
+        .mentions-toggle input {
+          margin-top: 3px;
+        }
+        .company-loading {
+          margin-top: 12px;
+          color: #0d6efd;
+          font-weight: 600;
+        }
+        .company-error,
+        .partial-warning {
+          margin-top: 12px;
+          padding: 10px 12px;
+          border-radius: 6px;
+          background: #fff3cd;
+          border: 1px solid #ffc107;
+          color: #664d03;
+        }
+        .company-results {
+          background: white;
+          border: 1px solid #dee2e6;
+          border-radius: 8px;
+          padding: 18px;
+        }
+        .company-results h2 {
+          font-size: 20px;
+          margin-bottom: 6px;
+        }
+        .results-summary {
+          font-weight: 700;
+          color: #495057;
+        }
+        .results-reminder {
+          margin-top: 8px;
+          font-style: italic;
+          color: #495057;
+        }
+        .record-list {
+          margin-top: 16px;
+          display: grid;
+          gap: 12px;
+        }
+        .record-card {
+          position: relative;
+          border: 1px solid #dee2e6;
+          border-left: 4px solid #6c757d;
+          border-radius: 8px;
+          padding: 16px;
+          background: #ffffff;
+        }
+        .record-card.wrc {
+          border-left-color: #0d6efd;
+        }
+        .record-card.hsa {
+          border-left-color: #dc3545;
+        }
+        .record-kicker {
+          text-transform: uppercase;
+          letter-spacing: 0;
+          font-size: 12px;
+          font-weight: 800;
+          color: #6c757d;
+          margin-bottom: 6px;
+        }
+        .record-card h3 {
+          padding-right: 90px;
+          margin-bottom: 6px;
+          font-size: 18px;
+        }
+        .record-meta {
+          color: #495057;
+          font-weight: 600;
+          margin-bottom: 10px;
+        }
+        .confidence-badge {
+          position: absolute;
+          top: 14px;
+          right: 14px;
+          padding: 4px 8px;
+          border-radius: 999px;
+          font-size: 12px;
+          font-weight: 800;
+          text-transform: uppercase;
+        }
+        .confidence-badge.high {
+          background: #d1e7dd;
+          color: #0f5132;
+        }
+        .confidence-badge.medium {
+          background: #fff3cd;
+          color: #664d03;
+        }
+        .confidence-badge.low {
+          background: #f8d7da;
+          color: #842029;
+        }
+        .source-button {
+          display: inline-block;
+          margin-top: 12px;
+          color: #0d6efd;
+          font-weight: 700;
+        }
+        .source-unavailable {
+          margin-top: 12px;
+          color: #6c757d;
+          font-size: 13px;
+        }
+        .chat-bridge {
+          margin-top: 18px;
+          padding: 16px;
+          border-radius: 8px;
+          background: #f1f5f9;
+          border: 1px solid #d8e0ea;
+        }
+        .chat-bridge h3 {
+          margin-bottom: 8px;
+        }
+        .chat-bridge p {
+          margin-bottom: 12px;
+          color: #495057;
+          line-height: 1.5;
+        }
+
+        /* ===========================
            FOOTER
            =========================== */
         .footer {
@@ -751,6 +1306,16 @@ export default function Home() {
           }
           .time-limit-warning {
             font-size: 11px;
+          }
+          .mode-toggle-wrap {
+            padding: 8px 12px;
+          }
+          .mode-toggle {
+            width: 100%;
+          }
+          .mode-tab {
+            flex: 1;
+            padding: 9px 10px;
           }
 
           /* Sidebar becomes slide-out drawer */
@@ -847,6 +1412,11 @@ export default function Home() {
           .messages {
             padding: 12px;
           }
+          .chat-toolbar {
+            padding: 8px 12px 0;
+            flex-direction: column;
+            align-items: stretch;
+          }
 
           /* Input area */
           .input-area {
@@ -864,6 +1434,21 @@ export default function Home() {
           .footer {
             padding: 10px 12px;
             font-size: 11px;
+          }
+          .company-panel {
+            padding: 12px;
+          }
+          .company-info-box,
+          .company-form,
+          .company-results {
+            padding: 14px;
+          }
+          .company-form-row {
+            flex-direction: column;
+          }
+          .record-card h3 {
+            padding-right: 0;
+            margin-top: 28px;
           }
         }
 
