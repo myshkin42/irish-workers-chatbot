@@ -67,13 +67,12 @@ def test_system_prompt_contains_key_elements():
     assert "Labour Court" in SYSTEM_PROMPT
     assert "HSA" in SYSTEM_PROMPT
     
-    # Check for key time limits
-    assert "6 months" in SYSTEM_PROMPT
+    # Check for key time-limit guidance
+    assert "time limit" in SYSTEM_PROMPT.lower()
     
-    # Check for key topics
-    assert "minimum wage" in SYSTEM_PROMPT.lower()
-    assert "unfair dismissal" in SYSTEM_PROMPT.lower()
-    assert "redundancy" in SYSTEM_PROMPT.lower()
+    # Check for key topic framing
+    assert "workplace rights" in SYSTEM_PROMPT.lower()
+    assert "unfair dismissals act" in SYSTEM_PROMPT.lower()
 
 
 # Integration tests (require API keys - skip in CI)

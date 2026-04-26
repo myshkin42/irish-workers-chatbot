@@ -22,9 +22,11 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 import json
+import httpx
 
 from .system_prompt import SYSTEM_PROMPT
 from .query_preprocessing import preprocess_query
+from .lookup_store import LookupStore
 
 # ----------------------------------------------------------------------------
 # Query Logging
@@ -32,7 +34,8 @@ from .query_preprocessing import preprocess_query
 LOG_DIR = Path("/data/logs")
 
 def log_query(message: str, answer: str, sources: list, best_score: float,
-              tier: str, has_good_sources: bool, context_used: str = None):
+              tier: str, has_good_sources: bool, context_used: str = None,
+              lookup_id: str | None = None):
     """Log query and response to a JSON lines file. One line per interaction."""
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -46,6 +49,7 @@ def log_query(message: str, answer: str, sources: list, best_score: float,
             "tier": tier,
             "has_good_sources": has_good_sources,
             "context_query": context_used,
+            "lookup_id": lookup_id,
         }
         with open(log_file, "a") as f:
             f.write(json.dumps(entry) + "\n")
@@ -198,6 +202,14 @@ PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 PINECONE_INDEX_NAME = os.getenv("PINECONE_INDEX_NAME", "irish-workers-chatbot")
 API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN")
 ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+COMPANY_CHECK_API_URL = os.getenv("COMPANY_CHECK_API_URL", "").rstrip("/")
+COMPANY_CHECK_API_TOKEN = os.getenv("COMPANY_CHECK_API_TOKEN", "")
+COMPANY_CHECK_LOOKUP_TTL_MINUTES = int(os.getenv("COMPANY_CHECK_LOOKUP_TTL_MINUTES", "30"))
+
+if not COMPANY_CHECK_API_URL or not COMPANY_CHECK_API_TOKEN:
+    print("Warning: Company check is not configured - /api/company-check will return 503")
+
+lookup_store = LookupStore(ttl_minutes=COMPANY_CHECK_LOOKUP_TTL_MINUTES)
 
 # Model configuration
 CLAUDE_MODEL = "claude-haiku-4-5-20251001"  # Claude 4.5 Haiku
@@ -271,6 +283,7 @@ class Message(BaseModel):
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
     history: List[Message] = Field(default_factory=list, max_length=20)
+    lookup_id: Optional[str] = None
 
 class ChatResponse(BaseModel):
     answer: str
@@ -279,6 +292,13 @@ class ChatResponse(BaseModel):
     has_authoritative_sources: bool = True  # False when no sources met relevance threshold
     disclaimer: str = "This is general information only, not legal advice. For specific situations, consult a solicitor, your union, or the WRC."
     knowledge_base_updated: str = KNOWLEDGE_BASE_UPDATED
+    lookup_context_expired: bool = False
+
+
+class CompanyCheckRequest(BaseModel):
+    company: str = Field(..., min_length=2, max_length=200)
+    include_mentions: bool = False
+    limit: int = Field(default=10, ge=1, le=50)
 
 # ----------------------------------------------------------------------------
 # Core Functions
@@ -604,7 +624,8 @@ async def generate_response(
     query: str,
     context: str,
     history: List[Message],
-    has_good_sources: bool
+    has_good_sources: bool,
+    lookup_context: str | None = None
 ) -> str:
     """
     Generate response using Claude.
@@ -618,9 +639,12 @@ async def generate_response(
     # Build messages
     messages = format_history(history)
     
+    # Add lookup context only at generation time. It must never influence embedding or retrieval.
+    lookup_prefix = f"{lookup_context}\n\n" if lookup_context else ""
+
     # Add user message with context
     if has_good_sources:
-        user_message = f"""User question: {query}
+        user_message = f"""{lookup_prefix}User question: {query}
 
 Relevant information from Irish employment law sources:
 {context}
@@ -628,7 +652,7 @@ Relevant information from Irish employment law sources:
 Answer the user's question naturally. Do not mention or reference these sources in your response."""
     else:
         # No good sources - be honest about limitations
-        user_message = f"""User question: {query}
+        user_message = f"""{lookup_prefix}User question: {query}
 
 {context}"""
     
@@ -649,6 +673,35 @@ Answer the user's question naturally. Do not mention or reference these sources 
 # ----------------------------------------------------------------------------
 # Endpoints
 # ----------------------------------------------------------------------------
+def build_lookup_context(result: dict[str, Any]) -> str:
+    summary = result.get("summary") or {}
+    records = result.get("records") or []
+    lines = [
+        "[COMPANY CHECK CONTEXT - placeholder format, will be revised]",
+        f"The user previously ran a public-records check on: {result.get('company', 'Unknown company')}",
+        (
+            "Summary: "
+            f"{summary.get('total_records', 0)} records found "
+            f"(HSA: {summary.get('hsa_prosecutions', 0)}, WRC: {summary.get('wrc_decisions', 0)})"
+        ),
+        "Records:",
+    ]
+
+    for record in records[:10]:
+        source = record.get("source", "unknown")
+        date = record.get("date") or "date unknown"
+        url = record.get("url") or "no source URL"
+        if source == "hsa":
+            detail = record.get("fine_amount")
+            detail_text = f"fine EUR {detail}" if detail else record.get("outcome") or "prosecution record"
+        else:
+            detail_text = record.get("case_number") or "WRC decision record"
+        lines.append(f"- {source.upper()}: {detail_text}, {date}, {url}")
+
+    lines.append("[END COMPANY CHECK CONTEXT]")
+    return "\n".join(lines)
+
+
 @app.get("/")
 async def root():
     return {
@@ -656,6 +709,46 @@ async def root():
         "version": "1.0.0",
         "status": "running"
     }
+
+
+@app.post("/api/company-check")
+@limiter.limit("10/minute")
+async def company_check(
+    request: Request,
+    payload: CompanyCheckRequest,
+    _: bool = Depends(verify_token)
+):
+    if not COMPANY_CHECK_API_URL or not COMPANY_CHECK_API_TOKEN:
+        raise HTTPException(status_code=503, detail="Company check is not configured for this deployment.")
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{COMPANY_CHECK_API_URL}/company-check",
+                headers={"Authorization": f"Bearer {COMPANY_CHECK_API_TOKEN}"},
+                json={
+                    "company": payload.company,
+                    "include_mentions": payload.include_mentions,
+                    "limit": payload.limit,
+                },
+            )
+            response.raise_for_status()
+            result = response.json()
+    except httpx.HTTPError as exc:
+        print(f"[COMPANY-CHECK] Upstream lookup failed for '{payload.company[:60]}': {exc}")
+        raise HTTPException(status_code=503, detail="Lookup service is temporarily unavailable")
+
+    lookup_id = lookup_store.store(result)
+    summary = result.get("summary", {})
+    print(json.dumps({
+        "event": "company_check",
+        "company": payload.company,
+        "lookup_id": lookup_id,
+        "total_records": summary.get("total_records"),
+        "partial_results": result.get("partial_results"),
+        "elapsed_ms": result.get("elapsed_ms"),
+    }))
+    return {"lookup_id": lookup_id, "result": result}
 
 
 @app.get("/metadata")
@@ -721,29 +814,43 @@ async def chat(
             sources=[],
             official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]]
         )
+
+    lookup_context = None
+    lookup_context_expired = False
+    if payload.lookup_id:
+        lookup_result = lookup_store.get(payload.lookup_id)
+        if lookup_result:
+            # TEMPORARY PLACEHOLDER FORMAT - to be replaced after end-to-end testing.
+            # The proper compact-context format and system-prompt addition will be
+            # specified in a follow-up brief.
+            lookup_context = build_lookup_context(lookup_result)
+        else:
+            lookup_context_expired = True
     
     # Greeting/meta check — skip retrieval entirely for greetings
     greeting_response = check_greeting_or_meta(payload.message)
     if greeting_response:
         print(f"[GREETING] Matched: '{payload.message[:30]}'")
-        log_query(payload.message, greeting_response, [], 0.0, "greeting", True)
+        log_query(payload.message, greeting_response, [], 0.0, "greeting", True, lookup_id=payload.lookup_id)
         return ChatResponse(
             answer=greeting_response,
             sources=[],
             official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
-            has_authoritative_sources=True  # Don't show the warning banner
+            has_authoritative_sources=True,  # Don't show the warning banner
+            lookup_context_expired=lookup_context_expired
         )
     
     # Out-of-scope check — redirect common non-employment-rights questions
     oos_response = check_out_of_scope(payload.message)
     if oos_response:
         print(f"[OUT-OF-SCOPE] Matched: '{payload.message[:30]}'")
-        log_query(payload.message, oos_response, [], 0.0, "out-of-scope", True)
+        log_query(payload.message, oos_response, [], 0.0, "out-of-scope", True, lookup_id=payload.lookup_id)
         return ChatResponse(
             answer=oos_response,
             sources=[],
             official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
-            has_authoritative_sources=True  # Don't show the warning banner
+            has_authoritative_sources=True,  # Don't show the warning banner
+            lookup_context_expired=lookup_context_expired
         )
     
     try:
@@ -765,12 +872,22 @@ async def chat(
         if best_raw_score < TIER2_FLOOR:
             print(f"[TIER3] Score {best_raw_score:.3f} below floor - asking for clarification")
             clarification = "I'd like to help, but could you give me a bit more detail about your situation? For example, are you asking about pay, working hours, leave, dismissal, or something else? The more specific you can be, the better I can point you to the right information."
-            log_query(payload.message, clarification, [], best_raw_score, "tier3", False, context_used=contextual_message if contextual_message != payload.message else None)
+            log_query(
+                payload.message,
+                clarification,
+                [],
+                best_raw_score,
+                "tier3",
+                False,
+                context_used=contextual_message if contextual_message != payload.message else None,
+                lookup_id=payload.lookup_id,
+            )
             return ChatResponse(
                 answer=clarification,
                 sources=[],
                 official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
-                has_authoritative_sources=False
+                has_authoritative_sources=False,
+                lookup_context_expired=lookup_context_expired
             )
         
         # 4. Re-rank matches (nudge better-fit documents to top)
@@ -806,7 +923,8 @@ async def chat(
             query=payload.message,
             context=context,
             history=payload.history,
-            has_good_sources=has_good_sources
+            has_good_sources=has_good_sources,
+            lookup_context=lookup_context,
         )
         
         # 9. Format sources for response (only include if we have good sources)
@@ -830,14 +948,16 @@ async def chat(
             payload.message, answer, sources,
             best_score=matches[0]["score"] if matches else 0.0,
             tier=tier, has_good_sources=has_good_sources,
-            context_used=contextual_message if contextual_message != payload.message else None
+            context_used=contextual_message if contextual_message != payload.message else None,
+            lookup_id=payload.lookup_id,
         )
         
         return ChatResponse(
             answer=answer, 
             sources=sources,
             official_links=official_links,
-            has_authoritative_sources=has_good_sources
+            has_authoritative_sources=has_good_sources,
+            lookup_context_expired=lookup_context_expired
         )
     
     except Exception as e:
