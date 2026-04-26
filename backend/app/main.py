@@ -684,6 +684,10 @@ def build_lookup_context(result: dict[str, Any]) -> str:
             f"{summary.get('total_records', 0)} records found "
             f"(HSA: {summary.get('hsa_prosecutions', 0)}, WRC: {summary.get('wrc_decisions', 0)})"
         ),
+        (
+            "Important: WRC records mean the employer name appears in a WRC decision record. "
+            "They do not show from this lookup that the employer lost, broke the law, or was at fault."
+        ),
         "Records:",
     ]
 
@@ -867,9 +871,10 @@ async def chat(
         #    filtering happens AFTER re-ranking so boosts can help.
         matches, best_raw_score = await search_knowledge_base(enhanced_query)
         
-        # 3. Tier 3: If raw score below floor, ask for clarification
-        #    (no point re-ranking or rewriting if nothing is even close)
-        if best_raw_score < TIER2_FLOOR:
+        # 3. Tier 3: If raw score below floor, ask for clarification.
+        #    Lookup-attached chats still go to generation so Claude can use
+        #    the company-check context without letting that context affect retrieval.
+        if best_raw_score < TIER2_FLOOR and not lookup_context:
             print(f"[TIER3] Score {best_raw_score:.3f} below floor - asking for clarification")
             clarification = "I'd like to help, but could you give me a bit more detail about your situation? For example, are you asking about pay, working hours, leave, dismissal, or something else? The more specific you can be, the better I can point you to the right information."
             log_query(
