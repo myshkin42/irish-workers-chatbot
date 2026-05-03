@@ -676,34 +676,162 @@ Answer the user's question naturally. Do not mention or reference these sources 
 def build_lookup_context(result: dict[str, Any]) -> str:
     summary = result.get("summary") or {}
     records = result.get("records") or []
+    total_records = summary.get("total_records", len(records))
+    hsa_count = summary.get("hsa_prosecutions", 0)
+    wrc_count = summary.get("wrc_decisions", 0)
+
     lines = [
-        "[COMPANY CHECK CONTEXT - placeholder format, will be revised]",
-        f"The user previously ran a public-records check on: {result.get('company', 'Unknown company')}",
-        (
-            "Summary: "
-            f"{summary.get('total_records', 0)} records found "
-            f"(HSA: {summary.get('hsa_prosecutions', 0)}, WRC: {summary.get('wrc_decisions', 0)})"
-        ),
-        (
-            "Important: WRC records mean the employer name appears in a WRC decision record. "
-            "They do not show from this lookup that the employer lost, broke the law, or was at fault."
-        ),
-        "Records:",
+        "[COMPANY CHECK CONTEXT]",
+        f"Lookup target: {result.get('company', 'Unknown company')}",
+        f"Total records: {total_records} (HSA prosecutions: {hsa_count}, WRC decisions: {wrc_count})",
+        f"Date range: {_lookup_date_range(records)}",
     ]
 
-    for record in records[:10]:
-        source = record.get("source", "unknown")
-        date = record.get("date") or "date unknown"
-        url = record.get("url") or "no source URL"
-        if source == "hsa":
-            detail = record.get("fine_amount")
-            detail_text = f"fine EUR {detail}" if detail else record.get("outcome") or "prosecution record"
-        else:
-            detail_text = record.get("case_number") or "WRC decision record"
-        lines.append(f"- {source.upper()}: {detail_text}, {date}, {url}")
+    if result.get("partial_results"):
+        lines.append("Note: This lookup completed with partial results — some sources may be missing data.")
 
-    lines.append("[END COMPANY CHECK CONTEXT]")
+    top_records = _select_lookup_top_records(records)
+    if top_records:
+        lines.extend(["", "Top records (most recent + highest-impact, up to 5):"])
+        for record in top_records:
+            lines.append(f"- {_format_lookup_record(record)}")
+
+        additional_count = max(len(records) - len(top_records), 0)
+        if additional_count:
+            lines.extend([
+                "",
+                (
+                    f"There are {additional_count} additional records not shown above. "
+                    "The user can ask for more detail on any specific year, source, or topic."
+                ),
+            ])
+
+    lines.extend([
+        "",
+        "Important framing for your response:",
+        "- WRC records mean the employer name appears in a WRC decision. They do not show that the employer lost, broke the law, or was at fault. The worker may have lost.",
+        "- HSA prosecutions are confirmed convictions or guilty pleas, with fines or sentences as stated.",
+        "- The user ran this check themselves. They have the records in front of them in another tab.",
+        "[END COMPANY CHECK CONTEXT]",
+    ])
+
     return "\n".join(lines)
+
+
+def _lookup_date_value(record: dict[str, Any]) -> datetime | None:
+    date = record.get("date")
+    if not date:
+        return None
+
+    value = str(date).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d %B %Y"):
+        try:
+            return datetime.strptime(value.replace(",", ""), fmt)
+        except ValueError:
+            continue
+
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _lookup_year(record: dict[str, Any]) -> int | None:
+    parsed = _lookup_date_value(record)
+    if parsed:
+        return parsed.year
+
+    date = record.get("date")
+    if isinstance(date, str) and len(date) >= 4 and date[:4].isdigit():
+        return int(date[:4])
+
+    return None
+
+
+def _lookup_date_range(records: list[dict[str, Any]]) -> str:
+    years = [year for record in records if (year := _lookup_year(record)) is not None]
+    if not years:
+        return "unknown"
+    return f"{min(years)}–{max(years)}"
+
+
+def _normalise(value: float | None, minimum: float, maximum: float) -> float:
+    if value is None:
+        return 0.0
+    if maximum <= minimum:
+        return 1.0
+    return (value - minimum) / (maximum - minimum)
+
+
+def _record_fine(record: dict[str, Any]) -> float | None:
+    fine = record.get("fine_amount")
+    if fine is None:
+        return None
+    try:
+        return float(fine)
+    except (TypeError, ValueError):
+        return None
+
+
+def _select_lookup_top_records(records: list[dict[str, Any]], limit: int = 5) -> list[dict[str, Any]]:
+    if len(records) <= limit:
+        return sorted(records, key=_lookup_display_sort_key, reverse=True)
+
+    date_values = [
+        parsed.timestamp()
+        for record in records
+        if (parsed := _lookup_date_value(record)) is not None
+    ]
+    min_date = min(date_values) if date_values else 0.0
+    max_date = max(date_values) if date_values else 0.0
+
+    fines = [fine for record in records if (fine := _record_fine(record)) is not None]
+    min_fine = min(fines) if fines else 0.0
+    max_fine = max(fines) if fines else 0.0
+
+    scored_records = []
+    for record in records:
+        parsed_date = _lookup_date_value(record)
+        recency_rank = _normalise(parsed_date.timestamp() if parsed_date else None, min_date, max_date)
+        if str(record.get("source") or "").lower() == "hsa":
+            fine_rank = _normalise(_record_fine(record), min_fine, max_fine)
+            score = (recency_rank * 0.5) + (fine_rank * 0.5)
+        else:
+            score = recency_rank
+        scored_records.append((score, record))
+
+    chosen = [record for _, record in sorted(scored_records, key=lambda item: item[0], reverse=True)[:limit]]
+    return sorted(chosen, key=_lookup_display_sort_key, reverse=True)
+
+
+def _lookup_display_sort_key(record: dict[str, Any]) -> tuple[float, float]:
+    parsed_date = _lookup_date_value(record)
+    date_score = parsed_date.timestamp() if parsed_date else 0.0
+    return (date_score, _record_fine(record) or 0.0)
+
+
+def _format_lookup_record(record: dict[str, Any]) -> str:
+    date = record.get("date") or "(date unknown)"
+    source = str(record.get("source") or "unknown").upper()
+    url = record.get("url") or "no source URL"
+
+    if source == "HSA":
+        defendant = record.get("company_name") or "unknown defendant"
+        outcome = record.get("outcome") or "not stated"
+        fine = record.get("fine_amount")
+        fine_text = _format_euro(fine) if fine is not None else "not stated"
+        return f"{date} | HSA | {defendant} | Outcome: {outcome}, Fine: {fine_text} | {url}"
+
+    case_number = record.get("case_number") or record.get("case_category") or "WRC decision"
+    return f"{date} | WRC | {case_number} | {url}"
+
+
+def _format_euro(value: Any) -> str:
+    try:
+        amount = int(float(value))
+    except (TypeError, ValueError):
+        return "not stated"
+    return f"€{amount:,}"
 
 
 @app.get("/")
@@ -824,9 +952,6 @@ async def chat(
     if payload.lookup_id:
         lookup_result = lookup_store.get(payload.lookup_id)
         if lookup_result:
-            # TEMPORARY PLACEHOLDER FORMAT - to be replaced after end-to-end testing.
-            # The proper compact-context format and system-prompt addition will be
-            # specified in a follow-up brief.
             lookup_context = build_lookup_context(lookup_result)
         else:
             lookup_context_expired = True

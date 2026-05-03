@@ -74,6 +74,109 @@ def test_company_check_proxy_happy_path(monkeypatch):
     assert main.lookup_store.get(body["lookup_id"]) == body["result"]
 
 
+def lookup_result(records, partial_results=False):
+    hsa = sum(1 for record in records if record["source"] == "hsa")
+    wrc = sum(1 for record in records if record["source"] == "wrc")
+    return {
+        "company": "Example Ltd",
+        "partial_results": partial_results,
+        "summary": {
+            "total_records": len(records),
+            "hsa_prosecutions": hsa,
+            "wrc_decisions": wrc,
+        },
+        "records": records,
+    }
+
+
+def hsa_record(date, fine=1000, company="Example Ltd"):
+    return {
+        "source": "hsa",
+        "date": date,
+        "company_name": company,
+        "outcome": "Guilty plea",
+        "fine_amount": fine,
+        "url": f"https://example.test/hsa/{date or 'unknown'}",
+    }
+
+
+def wrc_record(date, case_number="ADJ-0001"):
+    return {
+        "source": "wrc",
+        "date": date,
+        "case_number": case_number,
+        "url": f"https://example.test/wrc/{case_number}",
+    }
+
+
+def record_lines(context):
+    return [line for line in context.splitlines() if line.startswith("- ") and " | " in line]
+
+
+def test_build_lookup_context_empty_records_has_no_top_records():
+    from app.main import build_lookup_context
+
+    context = build_lookup_context(lookup_result([]))
+
+    assert "Total records: 0" in context
+    assert "Top records" not in context
+    assert "[END COMPANY CHECK CONTEXT]" in context
+
+
+def test_build_lookup_context_three_records_shows_all_without_additional_line():
+    from app.main import build_lookup_context
+
+    context = build_lookup_context(lookup_result([
+        hsa_record("2020-01-01", fine=1000),
+        wrc_record("2021-01-01", case_number="ADJ-2021"),
+        hsa_record("2019-01-01", fine=500),
+    ]))
+
+    assert "Top records (most recent + highest-impact, up to 5):" in context
+    assert len(record_lines(context)) == 3
+    assert "additional records not shown" not in context
+    assert "2021-01-01 | WRC | ADJ-2021" in context
+
+
+def test_build_lookup_context_eight_records_shows_top_five_and_additional_line():
+    from app.main import build_lookup_context
+
+    context = build_lookup_context(lookup_result([
+        hsa_record("2018-01-01", fine=1000),
+        hsa_record("2019-01-01", fine=2000),
+        hsa_record("2020-01-01", fine=3000),
+        hsa_record("2021-01-01", fine=4000),
+        hsa_record("2022-01-01", fine=5000),
+        hsa_record("2023-01-01", fine=6000),
+        wrc_record("2024-01-01", case_number="ADJ-2024"),
+        wrc_record("2025-01-01", case_number="ADJ-2025"),
+    ]))
+
+    assert len(record_lines(context)) == 5
+    assert "There are 3 additional records not shown above." in context
+
+
+def test_build_lookup_context_partial_results_note_is_included():
+    from app.main import build_lookup_context
+
+    context = build_lookup_context(lookup_result([hsa_record("2020-01-01")], partial_results=True))
+
+    assert "Note: This lookup completed with partial results" in context
+
+
+def test_build_lookup_context_unknown_date_sorts_last_and_displays_unknown():
+    from app.main import build_lookup_context
+
+    context = build_lookup_context(lookup_result([
+        hsa_record(None, fine=10000, company="Unknown Date Ltd"),
+        wrc_record("2022-01-01", case_number="ADJ-2022"),
+        hsa_record("2021-01-01", fine=1000, company="Known Date Ltd"),
+    ]))
+
+    lines = record_lines(context)
+    assert lines[-1].startswith("- (date unknown) | HSA | Unknown Date Ltd")
+
+
 @pytest.mark.asyncio
 async def test_generate_response_receives_lookup_context_without_retrieval_changes(monkeypatch):
     from app import main

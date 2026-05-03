@@ -24,6 +24,8 @@ interface Message {
   officialLinks?: Array<{ name: string; url: string; description: string }>;
   hasAuthoritativeSources?: boolean;
   isLookupOpener?: boolean;
+  suppressSources?: boolean;
+  lookupContextExpired?: boolean;
 }
 
 interface CompanyRecord {
@@ -120,6 +122,7 @@ export default function Home() {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setLoading(true);
+    const requestHadLookupId = !!lookupId;
 
     try {
       const history = messages.filter(m => !m.isLookupOpener).slice(-10).map(m => ({
@@ -149,7 +152,9 @@ export default function Home() {
         content: data.answer,
         sources: data.sources,
         officialLinks: data.official_links,
-        hasAuthoritativeSources: data.has_authoritative_sources
+        hasAuthoritativeSources: data.has_authoritative_sources,
+        suppressSources: requestHadLookupId,
+        lookupContextExpired: data.lookup_context_expired
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -413,7 +418,13 @@ export default function Home() {
                   </div>
                 )}
                 
-                {msg.sources && msg.sources.length > 0 && (
+                {msg.role === 'assistant' && msg.lookupContextExpired && (
+                  <div className="lookup-expired-notice">
+                    <small>The records from your earlier lookup are no longer available. Run a new check to continue.</small>
+                  </div>
+                )}
+
+                {!msg.suppressSources && msg.sources && msg.sources.length > 0 && (
                   <div className="message-sources">
                     <small>
                       <strong>Sources:</strong>{' '}
@@ -953,7 +964,7 @@ export default function Home() {
           font-size: 12px;
           color: #6c757d;
         }
-        .no-sources-warning {
+        .no-sources-warning, .lookup-expired-notice {
           margin-top: 10px;
           padding: 8px 12px;
           background: #fff3cd;
