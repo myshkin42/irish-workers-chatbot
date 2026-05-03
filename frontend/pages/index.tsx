@@ -295,7 +295,7 @@ export default function Home() {
             onClick={() => setMode('company')}
             type="button"
           >
-            Check a company
+            Check public records
           </button>
         </div>
       </div>
@@ -509,25 +509,21 @@ export default function Home() {
           ) : (
           <div className="company-panel">
             <section className="company-info-box">
-              <h2>Check public employer records</h2>
-              <h3>What this check does</h3>
+              <h2>Public employer records</h2>
+              <h3>What you&apos;ll find here</h3>
               <p>
-                This searches public records about Irish employers: prosecutions by the Health and Safety Authority
-                (HSA) and cases filed at the Workplace Relations Commission (WRC).
+                Public records about Irish employers: prosecutions by the Health and Safety Authority (HSA), and cases filed at the Workplace Relations Commission (WRC). The records go back to 2005.
               </p>
-              <h3>What it doesn&apos;t do</h3>
-              <p className="company-emphasis">
-                A match means the employer&apos;s name appears in a public record. It does NOT mean the employer broke
-                the law, lost a case, or treated workers badly.
+              <h3>What the results mean</h3>
+              <p>
+                HSA prosecutions are convictions. The fines and outcomes shown are what the court decided.
               </p>
               <p>
-                WRC search results show that a case was filed. They don&apos;t show what the WRC decided. For the actual
-                outcome, open the linked source record.
+                WRC matches mean the employer&apos;s name appears in a published case. They don&apos;t show whether the worker won or lost &mdash; open the linked record to see the outcome.
               </p>
               <h3>Best results</h3>
               <p>
-                Use the fullest company name you have, for example &quot;Tesco Ireland Limited&quot; rather than &quot;Tesco&quot;.
-                Short or common names can return matches for unrelated employers.
+                Use the fullest company name you have, for example &quot;Tesco Ireland Limited&quot; rather than &quot;Tesco&quot;. Short or common names can return matches for unrelated employers.
               </p>
             </section>
 
@@ -583,7 +579,7 @@ export default function Home() {
                       <span className={`confidence-badge ${record.confidence}`}>{record.confidence}</span>
                       {record.source === 'wrc' ? (
                         <>
-                          <p className="record-kicker">WRC adjudication record - subject not extracted</p>
+                          <p className="record-kicker">WRC adjudication record</p>
                           <h3>{record.company_name}</h3>
                           <p className="record-meta">
                             Filed: {record.date || 'Date not shown'}
@@ -1089,10 +1085,6 @@ export default function Home() {
         .company-info-box p {
           line-height: 1.5;
           margin-bottom: 8px;
-        }
-        .company-emphasis {
-          font-weight: 700;
-          font-size: 16px;
         }
         .company-form {
           background: white;
