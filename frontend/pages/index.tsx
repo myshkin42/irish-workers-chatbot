@@ -191,7 +191,7 @@ export default function Home() {
         body: JSON.stringify({
           company: companyName.trim(),
           include_mentions: includeMentions,
-          limit: 10
+          limit: 50
         })
       });
 
