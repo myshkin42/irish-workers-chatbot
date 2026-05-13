@@ -94,6 +94,12 @@ TEST_CASES = [
      "leave", None),
     ("How much sick leave can I take?",
      "sick leave", None),
+    ("annual leave",
+     "leave", "guide"),
+    ("sick leave",
+     "sick leave", "guide"),
+    ("paternity leave",
+     "paternity", "guide"),
 
     # Bullying (the one we fixed with re-ranking)
     ("I am being bullied at work",
@@ -118,10 +124,22 @@ TEST_CASES = [
     # Redundancy
     ("Am I entitled to redundancy pay?",
      "redundancy", None),
+    ("redundancy",
+     "redundancy", "guide"),
 
     # Maternity
     ("How much maternity leave am I entitled to?",
      "maternity", None),
+
+    # Bare topic query — regression test for the title-overlap fix.
+    # Before the fix, expansion added 'act', 'benefit', 'protection' to the
+    # query, which then title-matched the Maternity Protection Act AND the
+    # Paternity Leave and Benefit Act more strongly than the CI maternity guide.
+    # Top result should be a guide, not legislation.
+    ("maternity leave",
+     "maternity", "guide"),
+    ("where does the law say about maternity leave",
+     "maternity protection act", "legislation"),
 ]
 
 
@@ -135,8 +153,12 @@ def run_single_query(query: str, verbose: bool = False):
     matches = search_all_namespaces(enhanced)
     best_raw = matches[0]["score"] if matches else 0.0
 
-    # Step 3: Re-rank (use enhanced query so expansions feed into ranking)
-    matches = rerank_matches(matches, enhanced)
+    # Step 3: Re-rank.
+    #   enhanced query     → for embedding-aware boosts (topic-type lookups)
+    #   original query     → for title-keyword overlap, so preprocessing-added
+    #                        legislative words (act/benefit/protection) don't
+    #                        spuriously match legislation titles.
+    matches = rerank_matches(matches, enhanced, original_query=query)
 
     # Step 4: Threshold
     good = [m for m in matches if m["score"] >= MINIMUM_RELEVANCE_SCORE]
@@ -194,7 +216,7 @@ def run_test_suite(verbose: bool = False):
         enhanced, qp_meta = preprocess_query(query)
         matches = search_all_namespaces(enhanced)
         best_raw = matches[0]["score"] if matches else 0.0
-        matches = rerank_matches(matches, enhanced)
+        matches = rerank_matches(matches, enhanced, original_query=query)
         good = [m for m in matches if m["score"] >= MINIMUM_RELEVANCE_SCORE]
 
         # Check results

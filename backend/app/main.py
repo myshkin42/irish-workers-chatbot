@@ -463,18 +463,38 @@ async def tier2_rewrite_query(query: str) -> str:
 # This is much lighter than the Australian version — no profession routing,
 # no state detection, no international law. Just topic-title alignment.
 
-def rerank_matches(matches: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+def rerank_matches(
+    matches: List[Dict[str, Any]],
+    query: str,
+    original_query: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """
     Re-rank retrieved matches by applying small score boosts
     when document metadata aligns with the query topic.
-    
+
     Boosts are additive to the original cosine score so they only
     break ties — they can't promote a genuinely irrelevant document.
+
+    Args:
+        matches: Retrieved matches to re-rank.
+        query: The query used for embedding (may include preprocessing
+            expansions like 'maternity protection act benefit'). Used
+            for topic-type lookups so expanded topic terms still trigger
+            appropriate boosts.
+        original_query: The user's actual words (with conversation context,
+            but WITHOUT synthetic preprocessing expansions). Used for
+            title-keyword overlap so expansion-added words like 'act',
+            'benefit', 'protection' don't spuriously match legislation
+            titles (e.g. a bare 'maternity leave' query that expanded to
+            include 'act' and 'benefit' should not boost the Paternity
+            Leave AND Benefit ACT chunks via title overlap). Falls back to
+            `query` when not provided.
     """
     if not matches:
         return matches
     
     q = query.lower()
+    orig_q = (original_query or query).lower()
     
     for match in matches:
         meta = match.get("metadata", {})
@@ -483,10 +503,14 @@ def rerank_matches(matches: List[Dict[str, Any]], query: str) -> List[Dict[str, 
         text = (meta.get("text") or meta.get("content") or "").lower()[:500]
         boost = 0.0
         
-        # 1. Title keyword match — strongest signal
-        #    If the user asks about "bullying" and the doc title contains "bullying",
-        #    that's almost certainly the right document.
-        query_keywords = set(q.split()) - {"i", "am", "being", "at", "work", "my", "the", "a", "an", "is", "was", "to", "in", "of", "for", "can", "do", "how", "what", "me", "im"}
+        # 1. Title keyword match — strongest signal.
+        #    Use the ORIGINAL query (not the expanded one) so synthetic
+        #    expansion terms can't match legislation titles. Without this,
+        #    a bare "maternity leave" query gets expanded with 'act',
+        #    'benefit', 'protection' — which then title-match the
+        #    Maternity Protection Act AND the Paternity Leave and Benefit Act
+        #    more strongly than the Citizens Information maternity guide.
+        query_keywords = set(orig_q.split()) - {"i", "am", "being", "at", "work", "my", "the", "a", "an", "is", "was", "to", "in", "of", "for", "can", "do", "how", "what", "me", "im"}
         title_words = set(title.split())
         keyword_overlap = query_keywords & title_words
         if keyword_overlap:
@@ -1021,9 +1045,16 @@ async def chat(
             )
         
         # 4. Re-rank matches (nudge better-fit documents to top)
-        #    Use enhanced_query so preprocessing expansions feed into ranking
+        #    enhanced_query is used for embedding-aware boosts (topic-type lookups).
+        #    contextual_message is used as original_query for title-keyword overlap,
+        #    so preprocessing-added legislative words (act/benefit/protection) don't
+        #    spuriously match legislation titles via the title-overlap boost.
         if matches:
-            matches = rerank_matches(matches, enhanced_query)
+            matches = rerank_matches(
+                matches,
+                enhanced_query,
+                original_query=contextual_message,
+            )
         
         # 5. Apply relevance threshold AFTER re-ranking
         #    Boosts can push borderline-but-correct matches over the line
