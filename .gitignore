@@ -21,6 +21,9 @@ data/documents/
 .DS_Store
 Thumbs.db
 
+# Local notes
+Irish Workers' Rights Chatbot + Company check.txt
+
 # IDE
 .vscode/
 .idea/
