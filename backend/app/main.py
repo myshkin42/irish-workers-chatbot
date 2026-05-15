@@ -702,12 +702,18 @@ def build_lookup_context(result: dict[str, Any]) -> str:
     records = result.get("records") or []
     total_records = summary.get("total_records", len(records))
     hsa_count = summary.get("hsa_prosecutions", 0)
-    wrc_count = summary.get("wrc_decisions", 0)
+    decision_count = summary.get(
+        "decision_records",
+        summary.get("wrc_decisions", 0)
+        + summary.get("labour_court_records", 0)
+        + summary.get("eat_records", 0)
+        + summary.get("equality_records", 0),
+    )
 
     lines = [
         "[COMPANY CHECK CONTEXT]",
         f"Lookup target: {result.get('company', 'Unknown company')}",
-        f"Total records: {total_records} (HSA prosecutions: {hsa_count}, WRC decisions: {wrc_count})",
+        f"Total records: {total_records} (HSA prosecutions: {hsa_count}, public decision records: {decision_count})",
         f"Date range: {_lookup_date_range(records)}",
     ]
 
@@ -733,7 +739,7 @@ def build_lookup_context(result: dict[str, Any]) -> str:
     lines.extend([
         "",
         "Important framing for your response:",
-        "- WRC records mean the employer name appears in a WRC decision. They do not show that the employer lost, broke the law, or was at fault. The worker may have lost.",
+        "- Public decision records mean the employer name appears in a published case from the WRC, Labour Court, Employment Appeals Tribunal, or Equality Tribunal. They do not show that the employer lost, broke the law, or was at fault. The worker may have lost.",
         "- HSA prosecutions are confirmed convictions or guilty pleas, with fines or sentences as stated.",
         "- The user ran this check themselves. They have the records in front of them in another tab.",
         "[END COMPANY CHECK CONTEXT]",
@@ -836,18 +842,25 @@ def _lookup_display_sort_key(record: dict[str, Any]) -> tuple[float, float]:
 
 def _format_lookup_record(record: dict[str, Any]) -> str:
     date = record.get("date") or "(date unknown)"
-    source = str(record.get("source") or "unknown").upper()
+    source = str(record.get("source") or "unknown").lower()
+    source_label = {
+        "hsa": "HSA",
+        "wrc": "WRC",
+        "labour_court": "Labour Court",
+        "eat": "EAT",
+        "equality": "Equality Tribunal",
+    }.get(source, source.upper())
     url = record.get("url") or "no source URL"
 
-    if source == "HSA":
+    if source == "hsa":
         defendant = record.get("company_name") or "unknown defendant"
         outcome = record.get("outcome") or "not stated"
         fine = record.get("fine_amount")
         fine_text = _format_euro(fine) if fine is not None else "not stated"
-        return f"{date} | HSA | {defendant} | Outcome: {outcome}, Fine: {fine_text} | {url}"
+        return f"{date} | {source_label} | {defendant} | Outcome: {outcome}, Fine: {fine_text} | {url}"
 
-    case_number = record.get("case_number") or record.get("case_category") or "WRC decision"
-    return f"{date} | WRC | {case_number} | {url}"
+    case_number = record.get("case_number") or record.get("case_category") or "decision"
+    return f"{date} | {source_label} | {case_number} | {url}"
 
 
 def _format_euro(value: Any) -> str:

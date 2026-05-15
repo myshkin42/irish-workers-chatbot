@@ -17,6 +17,18 @@ import ReactMarkdown from 'react-markdown';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+type DecisionSource = 'wrc' | 'labour_court' | 'eat' | 'equality' | 'unknown';
+
+const DECISION_KICKERS: Record<DecisionSource, string> = {
+  wrc: 'WRC ADJUDICATION RECORD',
+  labour_court: 'LABOUR COURT DETERMINATION',
+  eat: 'EMPLOYMENT APPEALS TRIBUNAL DETERMINATION',
+  equality: 'EQUALITY TRIBUNAL DECISION',
+  unknown: 'DECISION RECORD'
+};
+
+const isDecisionSource = (source: CompanyRecord['source']): source is DecisionSource => source !== 'hsa';
+
 interface Message {
   role: 'user' | 'assistant';
   content: string;
@@ -29,7 +41,8 @@ interface Message {
 }
 
 interface CompanyRecord {
-  source: 'hsa' | 'wrc';
+  source: 'hsa' | DecisionSource;
+  body?: DecisionSource | null;
   company_name: string;
   matched_as: 'defendant' | 'mention';
   case_number?: string | null;
@@ -50,8 +63,11 @@ interface CompanyCheckResult {
   summary: {
     total_records: number;
     hsa_prosecutions: number;
+    decision_records?: number;
     wrc_decisions: number;
     labour_court_records: number;
+    eat_records?: number;
+    equality_records?: number;
   };
   source_status: Record<string, string>;
   partial_results: boolean;
@@ -214,7 +230,11 @@ export default function Home() {
   const openChatWithResults = () => {
     if (!companyResult || !lookupId) return;
 
-    const wrc = companyResult.summary.wrc_decisions || 0;
+    const decisionRecords = companyResult.summary.decision_records ??
+      ((companyResult.summary.wrc_decisions || 0) +
+        (companyResult.summary.labour_court_records || 0) +
+        (companyResult.summary.eat_records || 0) +
+        (companyResult.summary.equality_records || 0));
     const hsa = companyResult.summary.hsa_prosecutions || 0;
     setMode('chat');
     setLookupExpired(false);
@@ -222,7 +242,7 @@ export default function Home() {
       ...prev,
       {
         role: 'assistant',
-        content: `I can see the records you just looked up for **${companyResult.company}** (${wrc} WRC cases, ${hsa} HSA prosecutions). What would you like to ask about them?`,
+        content: `I can see the records you just looked up for **${companyResult.company}** (${decisionRecords} decision records, ${hsa} HSA prosecutions). What would you like to ask about them?`,
         hasAuthoritativeSources: true,
         isLookupOpener: true
       }
@@ -512,14 +532,14 @@ export default function Home() {
               <h2>Public employer records</h2>
               <h3>What you&apos;ll find here</h3>
               <p>
-                Public records about Irish employers: prosecutions by the Health and Safety Authority (HSA), and cases filed at the Workplace Relations Commission (WRC). The records go back to 2005.
+                Public records about Irish employers: prosecutions by the Health and Safety Authority (HSA), and cases heard by the Workplace Relations Commission (WRC), the Labour Court, the Employment Appeals Tribunal, and the Equality Tribunal. Records go back to 1996 for some bodies.
               </p>
               <h3>What the results mean</h3>
               <p>
                 HSA prosecutions are convictions. The fines and outcomes shown are what the court decided.
               </p>
               <p>
-                WRC matches mean the employer&apos;s name appears in a published case. They don&apos;t show whether the worker won or lost &mdash; open the linked record to see the outcome.
+                A match means the employer&apos;s name appears in a published case from one of these bodies. The match doesn&apos;t show whether the worker won or lost &mdash; open the linked record to see the outcome.
               </p>
               <h3>Best results</h3>
               <p>
@@ -562,10 +582,15 @@ export default function Home() {
                   Found {companyResult.summary.total_records} public records for &quot;{companyResult.company}&quot;:
                 </h2>
                 <p className="results-summary">
-                  {companyResult.summary.hsa_prosecutions} HSA prosecutions, {companyResult.summary.wrc_decisions} WRC cases.
+                  {companyResult.summary.hsa_prosecutions} HSA prosecutions, {companyResult.summary.decision_records ?? (
+                    (companyResult.summary.wrc_decisions || 0) +
+                    (companyResult.summary.labour_court_records || 0) +
+                    (companyResult.summary.eat_records || 0) +
+                    (companyResult.summary.equality_records || 0)
+                  )} decision records.
                 </p>
                 <p className="results-reminder">
-                  Remember: WRC matches mean a case was filed, not that the company lost it. Open each source for the actual decision.
+                  Remember: decision matches mean a published case mentions the employer, not that the company lost it. Open each source for the actual decision.
                 </p>
                 {companyResult.partial_results && (
                   <p className="partial-warning">
@@ -577,16 +602,16 @@ export default function Home() {
                   {companyResult.records.map((record, i) => (
                     <article key={`${record.source}-${record.case_number || record.company_name}-${i}`} className={`record-card ${record.source}`}>
                       <span className={`confidence-badge ${record.confidence}`}>{record.confidence}</span>
-                      {record.source === 'wrc' ? (
+                      {isDecisionSource(record.source) ? (
                         <>
-                          <p className="record-kicker">WRC adjudication record</p>
+                          <p className="record-kicker">{DECISION_KICKERS[record.source]}</p>
                           <h3>{record.company_name}</h3>
                           <p className="record-meta">
                             Filed: {record.date || 'Date not shown'}
                             {record.case_number ? ` - Case ${record.case_number}` : ''}
                           </p>
                           <p>
-                            Outcome not extracted by this search. Open the source record to see the WRC&apos;s decision and what the case was about.
+                            Outcome not extracted by this search. Open the source record to see the decision and what the case was about.
                           </p>
                         </>
                       ) : (
@@ -1187,6 +1212,18 @@ export default function Home() {
         }
         .record-card.wrc {
           border-left-color: #0d6efd;
+        }
+        .record-card.labour_court {
+          border-left-color: #6f42c1;
+        }
+        .record-card.eat {
+          border-left-color: #198754;
+        }
+        .record-card.equality {
+          border-left-color: #fd7e14;
+        }
+        .record-card.unknown {
+          border-left-color: #6c757d;
         }
         .record-card.hsa {
           border-left-color: #dc3545;
