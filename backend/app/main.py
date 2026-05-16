@@ -163,7 +163,7 @@ GREETING_RESPONSE = (
 TAX_PATTERNS = [
     "how much tax", "tax rate", "tax rates", "income tax", "pay tax",
     "tax band", "tax credit", "tax bracket", "paye", "usc",
-    "universal social charge", "prsi", "tax return", "tax refund",
+    "universal social charge", "tax return", "tax refund",
     "tax back", "tax relief", "gross to net", "take home pay",
     "net pay", "after tax",
 ]
@@ -572,6 +572,12 @@ def rerank_matches(
         for (kw, dtype), b in topic_type_boosts.items():
             if kw in q and dtype == doc_type:
                 boost += b
+
+        if (
+            ("prsi" in orig_q or "pay related social insurance" in q)
+            and ("prsi" in title or "prsi" in text or "pay related social insurance" in text)
+        ):
+            boost += 0.06
         
         # 3. Penalise generic catch-all documents when specific ones exist
         #    e.g. "Safety Representatives Resource Book" is 600+ pages covering everything

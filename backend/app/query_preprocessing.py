@@ -31,6 +31,7 @@ ABBREVIATION_EXPANSIONS: List[Tuple[re.Pattern, str, str]] = [
     (re.compile(r'\bihrec\b', re.IGNORECASE), 'irish human rights and equality commission', 'ihrec'),
     (re.compile(r'\bmrci\b', re.IGNORECASE), 'migrant rights centre ireland', 'mrci'),
     (re.compile(r'\bflac\b', re.IGNORECASE), 'free legal advice centres', 'flac'),
+    (re.compile(r'\bprsi\b', re.IGNORECASE), 'pay related social insurance', 'prsi'),
     (re.compile(r'\bnmw\b', re.IGNORECASE), 'national minimum wage', 'nmw'),
     (re.compile(r'\btupe\b', re.IGNORECASE), 'transfer of undertakings protection of employment', 'tupe'),
     (re.compile(r'\bgdpr\b', re.IGNORECASE), 'general data protection regulation', 'gdpr'),

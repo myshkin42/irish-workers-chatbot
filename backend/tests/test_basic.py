@@ -85,6 +85,45 @@ def test_greeting_detection_does_not_swallow_prefaced_questions():
     assert check_greeting_or_meta("Can you help me with maternity leave?") is None
 
 
+def test_basic_prsi_questions_are_not_tax_redirected():
+    from app.main import TAX_RESPONSE, check_out_of_scope
+
+    assert check_out_of_scope("what is PRSI?") is None
+    assert check_out_of_scope("what does PRSI mean") is None
+    assert check_out_of_scope("how much tax do I pay?") == TAX_RESPONSE
+    assert check_out_of_scope("what is my take home pay?") == TAX_RESPONSE
+
+
+def test_prsi_query_is_expanded_for_retrieval():
+    from app.query_preprocessing import preprocess_query
+
+    enhanced, metadata = preprocess_query("what is PRSI?")
+
+    assert "pay related social insurance" in enhanced.lower()
+    assert "abbrev:prsi" in metadata["expansions_used"]
+
+
+def test_prsi_rerank_boosts_exact_prsi_sources():
+    from app.main import MINIMUM_RELEVANCE_SCORE, rerank_matches
+
+    matches = [{
+        "score": 0.53,
+        "metadata": {
+            "display_name": "Ci Payslips",
+            "doc_type": "guide",
+            "text": "PRSI EE means Pay Related Social Insurance paid by the employee.",
+        },
+    }]
+
+    reranked = rerank_matches(
+        matches,
+        "what is pay related social insurance?",
+        original_query="what is PRSI?",
+    )
+
+    assert reranked[0]["score"] >= MINIMUM_RELEVANCE_SCORE
+
+
 # Integration tests (require API keys - skip in CI)
 @pytest.mark.skip(reason="Requires API keys")
 def test_chat_integration():
