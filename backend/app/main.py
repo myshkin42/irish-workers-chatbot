@@ -4,6 +4,7 @@ No session management, no Redis, no caching - just clean RAG.
 """
 import os
 import asyncio
+import re
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -139,6 +140,17 @@ META_PATTERNS = [
     "what can i ask", "what topics",
 ]
 
+META_ONLY_PATTERNS = [
+    "help",
+    "help me",
+    "can you help",
+    "can you help me",
+    "what can i ask",
+    "what topics",
+    "what can you do",
+    "what do you do",
+]
+
 GREETING_RESPONSE = (
     "Hello! I'm the Irish Workers' Rights Chatbot. I can help you with questions about "
     "your employment rights in Ireland — things like pay, working hours, leave, unfair dismissal, "
@@ -181,13 +193,19 @@ def check_greeting_or_meta(message: str) -> str | None:
     Returns a response string if matched, None otherwise.
     """
     lower = message.strip().lower().rstrip("?!.")
+    lower = re.sub(r"\s+", " ", lower)
     
-    # Exact or near-exact greeting
-    if lower in GREETING_PATTERNS or any(lower.startswith(g) for g in GREETING_PATTERNS):
+    # Exact or near-exact greeting. Do not treat a greeting prefix as a greeting
+    # when the rest of the message contains the real employment-law question.
+    if lower in GREETING_PATTERNS:
+        return GREETING_RESPONSE
+    if re.fullmatch(r"(hello|hi|hey|hiya|howdy|greetings|yo|sup)[\s,]*(there|codex|chatbot)?", lower):
         return GREETING_RESPONSE
     
     # Meta questions about the chatbot
-    if any(p in lower for p in META_PATTERNS):
+    if lower in META_ONLY_PATTERNS:
+        return GREETING_RESPONSE
+    if any(p in lower for p in META_PATTERNS) and len(lower.split()) <= 5:
         return GREETING_RESPONSE
     
     return None

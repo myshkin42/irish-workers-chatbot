@@ -75,6 +75,16 @@ def test_system_prompt_contains_key_elements():
     assert "unfair dismissals act" in SYSTEM_PROMPT.lower()
 
 
+def test_greeting_detection_does_not_swallow_prefaced_questions():
+    from app.main import GREETING_RESPONSE, check_greeting_or_meta
+
+    assert check_greeting_or_meta("Hi") == GREETING_RESPONSE
+    assert check_greeting_or_meta("Hello there!") == GREETING_RESPONSE
+    assert check_greeting_or_meta("Hi I need some help with maternity leave") is None
+    assert check_greeting_or_meta("Hello, can you tell me about redundancy?") is None
+    assert check_greeting_or_meta("Can you help me with maternity leave?") is None
+
+
 # Integration tests (require API keys - skip in CI)
 @pytest.mark.skip(reason="Requires API keys")
 def test_chat_integration():
