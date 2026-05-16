@@ -138,6 +138,61 @@ def test_payslip_deduction_rerank_boosts_exact_sources():
     assert reranked[0]["score"] >= MINIMUM_RELEVANCE_SCORE
 
 
+def test_records_redirect_classifier_is_conservative():
+    from app.main import (
+        RECORDS_REDIRECT_ACTIVE,
+        RECORDS_REDIRECT_NONE,
+        RECORDS_REDIRECT_PASSIVE,
+        classify_records_redirect,
+    )
+
+    assert classify_records_redirect("What's the minimum wage?") == {
+        "category": RECORDS_REDIRECT_NONE,
+        "company": None,
+    }
+    assert classify_records_redirect("Tell me about WRC complaint procedures") == {
+        "category": RECORDS_REDIRECT_NONE,
+        "company": None,
+    }
+    assert classify_records_redirect("I have complaints about pay") == {
+        "category": RECORDS_REDIRECT_NONE,
+        "company": None,
+    }
+
+    assert classify_records_redirect("I work at Tesco and I'm worried about my hours") == {
+        "category": RECORDS_REDIRECT_PASSIVE,
+        "company": "Tesco",
+    }
+    assert classify_records_redirect("Has Tesco been prosecuted?") == {
+        "category": RECORDS_REDIRECT_ACTIVE,
+        "company": "Tesco",
+    }
+    assert classify_records_redirect("Is Boots Ireland a good employer?") == {
+        "category": RECORDS_REDIRECT_ACTIVE,
+        "company": "Boots Ireland",
+    }
+    assert classify_records_redirect("Has Tesco or Aldi been prosecuted?") == {
+        "category": RECORDS_REDIRECT_NONE,
+        "company": None,
+    }
+
+
+def test_active_records_redirect_short_circuits_chat(monkeypatch, tmp_path):
+    from app import main
+
+    monkeypatch.setattr(main, "LOG_DIR", tmp_path)
+
+    client = TestClient(main.app)
+    response = client.post("/chat", json={"message": "Has Tesco been prosecuted?", "history": []})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["redirect_category"] == main.RECORDS_REDIRECT_ACTIVE
+    assert body["detected_company"] == "Tesco"
+    assert "Check Public Records tab" in body["answer"]
+    assert body["sources"] == []
+
+
 # Integration tests (require API keys - skip in CI)
 @pytest.mark.skip(reason="Requires API keys")
 def test_chat_integration():

@@ -51,7 +51,9 @@ def write_log_entry(entry: dict[str, Any]) -> None:
 
 def log_query(message: str, answer: str, sources: list, best_score: float,
               tier: str, has_good_sources: bool, context_used: str = None,
-              lookup_id: str | None = None):
+              lookup_id: str | None = None,
+              redirect_category: str = "none",
+              detected_company: str | None = None):
     """Log query and response to a JSON lines file. One line per interaction."""
     write_log_entry({
         "timestamp": utc_now_iso(),
@@ -64,6 +66,8 @@ def log_query(message: str, answer: str, sources: list, best_score: float,
         "has_good_sources": has_good_sources,
         "context_query": context_used,
         "lookup_id": lookup_id,
+        "redirect_category": redirect_category,
+        "detected_company": detected_company,
     })
 
 
@@ -99,6 +103,15 @@ def log_company_check(
         ),
         "partial_results": (result or {}).get("partial_results"),
         "elapsed_ms": (result or {}).get("elapsed_ms"),
+    })
+
+
+def log_records_redirect_click(company: str, source_message: str | None = None) -> None:
+    write_log_entry({
+        "timestamp": utc_now_iso(),
+        "event": "records_redirect_click",
+        "company": company,
+        "source_message": source_message[:500] if source_message else None,
     })
 
 # ----------------------------------------------------------------------------
@@ -316,6 +329,109 @@ def check_out_of_scope(message: str) -> str | None:
     return None
 
 
+RECORDS_REDIRECT_NONE = "none"
+RECORDS_REDIRECT_PASSIVE = "passive_mention"
+RECORDS_REDIRECT_ACTIVE = "active_redirect"
+
+COMMON_NON_COMPANY_TERMS = {
+    "hsa",
+    "wrc",
+    "labour court",
+    "employment appeals tribunal",
+    "equality tribunal",
+    "public records",
+    "check public records",
+    "my employer",
+    "employer",
+    "boss",
+    "company",
+    "workplace",
+    "someone",
+    "anyone",
+}
+
+ACTIVE_RECORDS_PATTERNS = [
+    r"\bhas\s+(?P<company>.+?)\s+been\s+(?:prosecuted|convicted|fined|taken\s+to\s+court)\b",
+    r"\bany\s+(?:hsa\s+)?prosecutions?\s+(?:against|for|about)\s+(?P<company>.+)",
+    r"\bis\s+(?P<company>.+?)\s+in\s+trouble\s+with\s+(?:the\s+)?hsa\b",
+    r"\bhsa\s+(?:cases?|prosecutions?|records?)\s+(?:for|against|about|on)\s+(?P<company>.+)",
+    r"\b(?:wrc|labour\s+court|eat|equality\s+tribunal)\s+(?:cases?|records?|decisions?|determinations?|complaints?)\s+(?:for|against|about|on)\s+(?P<company>.+)",
+    r"\badjudications?\s+(?:for|against|about|on)\s+(?P<company>.+)",
+    r"\bpublic\s+records?\s+(?:for|against|about|on)\s+(?P<company>.+)",
+    r"\bany\s+records?\s+(?:of|for|against|about|on)\s+(?P<company>.+)",
+    r"\bhas\s+anyone\s+sued\s+(?P<company>.+)",
+    r"\bcomplaints?\s+(?:against|about|for)\s+(?P<company>.+)",
+    r"\bis\s+(?P<company>.+?)\s+a\s+(?:bad|good|safe)\s+employer\b",
+    r"\bis\s+(?P<company>.+?)\s+safe\s+to\s+work\s+for\b",
+]
+
+PASSIVE_COMPANY_PATTERNS = [
+    r"\bi\s+work\s+(?:at|for|with)\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
+    r"\bworking\s+(?:at|for|with)\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
+    r"\bat\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
+    r"\bwith\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
+    r"\bmy\s+employer\s+is\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
+]
+
+
+def clean_detected_company(company: str) -> str | None:
+    company = re.sub(r"\s+", " ", company.strip(" \t\r\n\"'“”‘’.,?!;:()[]{}"))
+    company = re.sub(
+        r"\b(?:now|please|pls|for me|online|records?|cases?|complaints?|prosecutions?)\b$",
+        "",
+        company,
+        flags=re.IGNORECASE,
+    ).strip(" \t\r\n\"'“”‘’.,?!;:()[]{}")
+    company = re.sub(r"^(?:the\s+)", "", company, flags=re.IGNORECASE)
+    if not company or len(company) < 2:
+        return None
+    lower = company.lower()
+    if lower in COMMON_NON_COMPANY_TERMS:
+        return None
+    if re.search(r"\b(?:vs|versus|or|and)\b", lower):
+        return None
+    if len(company.split()) > 6:
+        return None
+    return company
+
+
+def looks_like_named_employer(company: str, *, allow_single_lowercase: bool = False) -> bool:
+    if not company:
+        return False
+    if re.search(r"\b(?:ltd|limited|plc|dac|uc|clg|ireland|stores|group|company|co)\b", company, re.IGNORECASE):
+        return True
+    if re.search(r"[A-Z]", company):
+        return True
+    return allow_single_lowercase and len(company.split()) == 1 and len(company) >= 3
+
+
+def classify_records_redirect(message: str) -> dict[str, str | None]:
+    """Conservatively detect when chat should point to public-records lookup."""
+    text = re.sub(r"\s+", " ", message.strip())
+    if not text:
+        return {"category": RECORDS_REDIRECT_NONE, "company": None}
+    if re.search(r"\b(?:vs|versus)\b", text, re.IGNORECASE):
+        return {"category": RECORDS_REDIRECT_NONE, "company": None}
+
+    for pattern in ACTIVE_RECORDS_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        company = clean_detected_company(match.group("company"))
+        if company and looks_like_named_employer(company):
+            return {"category": RECORDS_REDIRECT_ACTIVE, "company": company}
+
+    for pattern in PASSIVE_COMPANY_PATTERNS:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if not match:
+            continue
+        company = clean_detected_company(match.group("company"))
+        if company and looks_like_named_employer(company):
+            return {"category": RECORDS_REDIRECT_PASSIVE, "company": company}
+
+    return {"category": RECORDS_REDIRECT_NONE, "company": None}
+
+
 def check_greeting_or_meta(message: str) -> str | None:
     """
     Check if the message is a greeting or meta-question about the chatbot.
@@ -440,12 +556,19 @@ class ChatResponse(BaseModel):
     disclaimer: str = "This is general information only, not legal advice. For specific situations, consult a solicitor, your union, or the WRC."
     knowledge_base_updated: str = KNOWLEDGE_BASE_UPDATED
     lookup_context_expired: bool = False
+    redirect_category: str = RECORDS_REDIRECT_NONE
+    detected_company: Optional[str] = None
 
 
 class CompanyCheckRequest(BaseModel):
     company: str = Field(..., min_length=2, max_length=200)
     include_mentions: bool = False
     limit: int = Field(default=10, ge=1, le=50)
+
+
+class RecordsRedirectClickRequest(BaseModel):
+    company: str = Field(..., min_length=2, max_length=200)
+    source_message: Optional[str] = Field(default=None, max_length=4000)
 
 # ----------------------------------------------------------------------------
 # Core Functions
@@ -599,7 +722,7 @@ async def tier2_rewrite_query(query: str) -> str:
         messages=[{"role": "user", "content": f"Rewrite this worker's question using Irish employment law terms: {query}"}]
     )
     rewritten = response.content[0].text.strip()
-    print(f"[TIER2] Rewritten: '{query[:40]}...' → '{rewritten[:60]}...'")
+    print(f"[TIER2] Rewritten: '{query[:40]}...' -> '{rewritten[:60]}...'")
     return rewritten
 
 
@@ -1100,6 +1223,14 @@ async def company_check(
     return {"lookup_id": lookup_id, "result": result}
 
 
+@app.post("/api/records-redirect-click")
+@limiter.limit("30/minute")
+async def records_redirect_click(request: Request, payload: RecordsRedirectClickRequest):
+    """Log when a user follows an active chat-to-records redirect."""
+    log_records_redirect_click(payload.company, payload.source_message)
+    return {"status": "ok"}
+
+
 @app.get("/metadata")
 async def metadata():
     """
@@ -1172,31 +1303,87 @@ async def chat(
             lookup_context = build_lookup_context(lookup_result)
         else:
             lookup_context_expired = True
+
+    records_redirect = classify_records_redirect(payload.message)
+    redirect_category = records_redirect["category"] or RECORDS_REDIRECT_NONE
+    detected_company = records_redirect["company"]
     
     # Greeting/meta check — skip retrieval entirely for greetings
     greeting_response = check_greeting_or_meta(payload.message)
     if greeting_response:
         print(f"[GREETING] Matched: '{payload.message[:30]}'")
-        log_query(payload.message, greeting_response, [], 0.0, "greeting", True, lookup_id=payload.lookup_id)
+        log_query(
+            payload.message,
+            greeting_response,
+            [],
+            0.0,
+            "greeting",
+            True,
+            lookup_id=payload.lookup_id,
+            redirect_category=redirect_category,
+            detected_company=detected_company,
+        )
         return ChatResponse(
             answer=greeting_response,
             sources=[],
             official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
             has_authoritative_sources=True,  # Don't show the warning banner
-            lookup_context_expired=lookup_context_expired
+            lookup_context_expired=lookup_context_expired,
+            redirect_category=redirect_category,
+            detected_company=detected_company,
+        )
+
+    if redirect_category == RECORDS_REDIRECT_ACTIVE and detected_company:
+        answer = (
+            "That's a question for the Check Public Records tab. It searches public records "
+            "from the HSA, WRC, Labour Court, Employment Appeals Tribunal, and Equality Tribunal.\n\n"
+            f"Use the button below to open that check with **{detected_company}** pre-filled."
+        )
+        print(f"[RECORDS-REDIRECT] Active: '{payload.message[:60]}' -> {detected_company}")
+        log_query(
+            payload.message,
+            answer,
+            [],
+            0.0,
+            "records-redirect",
+            True,
+            lookup_id=payload.lookup_id,
+            redirect_category=redirect_category,
+            detected_company=detected_company,
+        )
+        return ChatResponse(
+            answer=answer,
+            sources=[],
+            official_links=[],
+            has_authoritative_sources=True,
+            lookup_context_expired=lookup_context_expired,
+            redirect_category=redirect_category,
+            detected_company=detected_company,
         )
     
     # Out-of-scope check — redirect common non-employment-rights questions
     oos_response = check_out_of_scope(payload.message)
     if oos_response:
         print(f"[OUT-OF-SCOPE] Matched: '{payload.message[:30]}'")
-        log_query(payload.message, oos_response, [], 0.0, "out-of-scope", True, lookup_id=payload.lookup_id)
+        log_query(
+            payload.message,
+            oos_response,
+            [],
+            0.0,
+            "out-of-scope",
+            True,
+            lookup_id=payload.lookup_id,
+            redirect_category=redirect_category,
+            detected_company=detected_company,
+        )
         return ChatResponse(
             answer=oos_response,
             sources=[],
             official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
             has_authoritative_sources=True,  # Don't show the warning banner
-            lookup_context_expired=lookup_context_expired
+            lookup_context_expired=lookup_context_expired,
+            redirect_category=redirect_category,
+            detected_company=detected_company,
         )
     
     try:
@@ -1228,13 +1415,17 @@ async def chat(
                 False,
                 context_used=contextual_message if contextual_message != payload.message else None,
                 lookup_id=payload.lookup_id,
+                redirect_category=redirect_category,
+                detected_company=detected_company,
             )
             return ChatResponse(
                 answer=clarification,
                 sources=[],
                 official_links=[OFFICIAL_SOURCES["wrc"], OFFICIAL_SOURCES["citizens_info"]],
                 has_authoritative_sources=False,
-                lookup_context_expired=lookup_context_expired
+                lookup_context_expired=lookup_context_expired,
+                redirect_category=redirect_category,
+                detected_company=detected_company,
             )
         
         # 4. Re-rank matches (nudge better-fit documents to top)
@@ -1264,7 +1455,7 @@ async def chat(
                 matches = rerank_matches(matches, rewritten_query)
             good_matches = [m for m in matches if m["score"] >= MINIMUM_RELEVANCE_SCORE]
             has_good_sources = len(good_matches) > 0
-            print(f"[TIER2] Rewrite best raw: {new_raw_score:.3f} → good sources: {has_good_sources}")
+            print(f"[TIER2] Rewrite best raw: {new_raw_score:.3f} -> good sources: {has_good_sources}")
         
         # Use good_matches from here on
         matches = good_matches if has_good_sources else matches[:3]  # fallback: show best we have
@@ -1304,6 +1495,8 @@ async def chat(
             tier=tier, has_good_sources=has_good_sources,
             context_used=contextual_message if contextual_message != payload.message else None,
             lookup_id=payload.lookup_id,
+            redirect_category=redirect_category,
+            detected_company=detected_company,
         )
         
         return ChatResponse(
@@ -1311,7 +1504,9 @@ async def chat(
             sources=sources,
             official_links=official_links,
             has_authoritative_sources=has_good_sources,
-            lookup_context_expired=lookup_context_expired
+            lookup_context_expired=lookup_context_expired,
+            redirect_category=redirect_category,
+            detected_company=detected_company,
         )
     
     except Exception as e:

@@ -97,6 +97,27 @@ def test_company_check_proxy_happy_path(monkeypatch, tmp_path):
     assert entries[-1]["decision_records"] == 1
 
 
+def test_records_redirect_click_is_logged(monkeypatch, tmp_path):
+    from app import main
+
+    monkeypatch.setattr(main, "LOG_DIR", tmp_path)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/api/records-redirect-click",
+        json={"company": "Tesco", "source_message": "Has Tesco been prosecuted?"},
+    )
+
+    assert response.status_code == 200
+    entries = [
+        json.loads(line)
+        for line in (tmp_path / "queries.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[-1]["event"] == "records_redirect_click"
+    assert entries[-1]["company"] == "Tesco"
+    assert entries[-1]["source_message"] == "Has Tesco been prosecuted?"
+
+
 def lookup_result(records, partial_results=False):
     hsa = sum(1 for record in records if record["source"] == "hsa")
     wrc = sum(1 for record in records if record["source"] == "wrc")

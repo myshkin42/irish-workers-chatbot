@@ -17,6 +17,7 @@ import ReactMarkdown from 'react-markdown';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
+type RedirectCategory = 'none' | 'passive_mention' | 'active_redirect';
 type DecisionSource = 'wrc' | 'labour_court' | 'eat' | 'equality' | 'unknown';
 
 const DECISION_KICKERS: Record<DecisionSource, string> = {
@@ -44,6 +45,8 @@ interface Message {
   isLookupOpener?: boolean;
   suppressSources?: boolean;
   lookupContextExpired?: boolean;
+  redirectCategory?: RedirectCategory;
+  detectedCompany?: string | null;
 }
 
 interface CompanyRecord {
@@ -121,6 +124,19 @@ export default function Home() {
       .then(res => res.json())
       .then(setMetadata)
       .catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get('tab');
+    const company = params.get('company');
+
+    if (tab === 'records') {
+      setMode('company');
+      if (company) {
+        setCompanyName(company);
+      }
+    }
   }, []);
 
   // Keep new assistant replies anchored at their start; user messages still advance to the bottom.
@@ -208,7 +224,9 @@ export default function Home() {
         officialLinks: data.official_links,
         hasAuthoritativeSources: data.has_authoritative_sources,
         suppressSources: requestHadLookupId,
-        lookupContextExpired: data.lookup_context_expired
+        lookupContextExpired: data.lookup_context_expired,
+        redirectCategory: data.redirect_category || 'none',
+        detectedCompany: data.detected_company || null
       };
 
       setMessages(prev => [...prev, assistantMessage]);
@@ -286,6 +304,34 @@ export default function Home() {
       }
     ]);
     setTimeout(() => inputRef.current?.focus(), 0);
+  };
+
+  const openRecordsFromRedirect = async (company: string, sourceMessage: string) => {
+    const trimmedCompany = company.trim();
+    if (!trimmedCompany) return;
+
+    setCompanyName(trimmedCompany);
+    setCompanyResult(null);
+    setCompanyError('');
+    setMode('company');
+
+    const params = new URLSearchParams(window.location.search);
+    params.set('tab', 'records');
+    params.set('company', trimmedCompany);
+    window.history.pushState(null, '', `/?${params.toString()}`);
+
+    try {
+      await fetch(`${API_URL}/api/records-redirect-click`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          company: trimmedCompany,
+          source_message: sourceMessage,
+        })
+      });
+    } catch (error) {
+      console.error('Records redirect click log error:', error);
+    }
   };
 
   const formatMoney = (amount?: number | null) => {
@@ -495,6 +541,28 @@ export default function Home() {
                 {msg.role === 'assistant' && msg.lookupContextExpired && (
                   <div className="lookup-expired-notice">
                     <small>The records from your earlier lookup are no longer available. Run a new check to continue.</small>
+                  </div>
+                )}
+
+                {msg.role === 'assistant' && msg.redirectCategory === 'active_redirect' && msg.detectedCompany && (
+                  <div className="records-redirect-card">
+                    <button
+                      type="button"
+                      onClick={() => openRecordsFromRedirect(
+                        msg.detectedCompany!,
+                        messages[i - 1]?.content || ''
+                      )}
+                    >
+                      Open Check Public Records for {msg.detectedCompany}
+                    </button>
+                  </div>
+                )}
+
+                {msg.role === 'assistant' && msg.redirectCategory === 'passive_mention' && msg.detectedCompany && (
+                  <div className="records-passive-note">
+                    <small>
+                      You can also check public records for {msg.detectedCompany} in the Check Public Records tab.
+                    </small>
                   </div>
                 )}
 
@@ -1055,6 +1123,34 @@ export default function Home() {
           border-radius: 6px;
           font-size: 12px;
           color: #856404;
+        }
+        .records-passive-note {
+          margin-top: 10px;
+          padding: 8px 12px;
+          background: #eef5ff;
+          border: 1px solid #b6d4fe;
+          border-radius: 6px;
+          color: #084298;
+        }
+        .records-passive-note small {
+          font-size: 12px;
+        }
+        .records-redirect-card {
+          margin-top: 12px;
+          padding-top: 12px;
+          border-top: 1px solid #dee2e6;
+        }
+        .records-redirect-card button {
+          border: 0;
+          background: #0d6efd;
+          color: white;
+          padding: 9px 14px;
+          border-radius: 6px;
+          cursor: pointer;
+          font-weight: 700;
+        }
+        .records-redirect-card button:hover {
+          background: #0b5ed7;
         }
         .message-links a {
           margin-right: 10px;
