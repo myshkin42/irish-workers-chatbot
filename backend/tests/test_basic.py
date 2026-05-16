@@ -93,9 +93,13 @@ def test_basic_prsi_questions_are_not_tax_redirected():
     assert check_out_of_scope("What is PRSI and USC?") is None
     assert check_out_of_scope("What is USC?") is None
     assert check_out_of_scope("what does PAYE mean on my payslip?") is None
+    assert check_out_of_scope("Can you explain what all the PAYE and PRSI things mean?") is None
+    assert check_out_of_scope("PAye?") is None
+    assert check_out_of_scope("USC and PRSI please") is None
     assert check_out_of_scope("how much tax do I pay?") == TAX_RESPONSE
     assert check_out_of_scope("how much USC do I pay?") == TAX_RESPONSE
     assert check_out_of_scope("what is my USC rate?") == TAX_RESPONSE
+    assert check_out_of_scope("how is PAYE calculated?") == TAX_RESPONSE
     assert check_out_of_scope("what is my take home pay?") == TAX_RESPONSE
 
 

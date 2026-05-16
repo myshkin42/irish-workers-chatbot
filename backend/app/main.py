@@ -184,6 +184,8 @@ TAX_CALCULATION_TERMS = [
     "bracket",
     "brackets",
     "calculate",
+    "calculated",
+    "calculating",
     "calculator",
     "credit",
     "credits",
@@ -200,9 +202,22 @@ TAX_CALCULATION_TERMS = [
 
 DEFINITION_QUESTION_RE = re.compile(
     r"^(?:(?:hi|hello|hey|hiya)[,\s]+)?"
+    r"(?:(?:can|could|would) you\s+)?"
     r"(?:what(?:'s| is| are)|what does|what do|explain|define|tell me about|meaning of)\b",
     re.IGNORECASE,
 )
+
+DEDUCTION_MEANING_TERMS = [
+    "abbreviation",
+    "abbreviations",
+    "definition",
+    "explain",
+    "mean",
+    "meaning",
+    "means",
+    "stand for",
+    "stands for",
+]
 
 TAX_RESPONSE = (
     "Tax is quite individual and depends on your income, marital status, credits, and reliefs — "
@@ -219,6 +234,23 @@ def contains_any_term(text: str, terms: List[str]) -> bool:
     return any(re.search(rf"\b{re.escape(term)}\b", text) for term in terms)
 
 
+def is_bare_payslip_deduction_query(text: str) -> bool:
+    cleaned = re.sub(r"[^\w\s]", " ", text)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if not cleaned:
+        return False
+
+    remainder = cleaned
+    for term in sorted(PAYSLIP_DEDUCTION_TERMS, key=len, reverse=True):
+        remainder = re.sub(rf"\b{re.escape(term)}\b", " ", remainder)
+    remainder = re.sub(
+        r"\b(?:and|or|the|all|thing|things|stuff|please|pls)\b",
+        " ",
+        remainder,
+    )
+    return not re.sub(r"\s+", "", remainder)
+
+
 def check_out_of_scope(message: str) -> str | None:
     """Check if the message is about a topic we should redirect rather than retrieve."""
     lower = message.strip().lower()
@@ -228,7 +260,11 @@ def check_out_of_scope(message: str) -> str | None:
     if has_payslip_deduction_term and not asks_for_calculation:
         if DEFINITION_QUESTION_RE.search(lower):
             return None
-        if "payslip" in lower and contains_any_term(lower, ["mean", "means", "deduction", "deductions", "abbreviation"]):
+        if contains_any_term(lower, DEDUCTION_MEANING_TERMS):
+            return None
+        if is_bare_payslip_deduction_query(lower):
+            return None
+        if "payslip" in lower and contains_any_term(lower, ["deduction", "deductions"]):
             return None
 
     if contains_any_term(lower, TAX_PATTERNS):
