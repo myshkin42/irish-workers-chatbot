@@ -90,20 +90,30 @@ def test_basic_prsi_questions_are_not_tax_redirected():
 
     assert check_out_of_scope("what is PRSI?") is None
     assert check_out_of_scope("what does PRSI mean") is None
+    assert check_out_of_scope("What is PRSI and USC?") is None
+    assert check_out_of_scope("What is USC?") is None
+    assert check_out_of_scope("what does PAYE mean on my payslip?") is None
     assert check_out_of_scope("how much tax do I pay?") == TAX_RESPONSE
+    assert check_out_of_scope("how much USC do I pay?") == TAX_RESPONSE
+    assert check_out_of_scope("what is my USC rate?") == TAX_RESPONSE
     assert check_out_of_scope("what is my take home pay?") == TAX_RESPONSE
 
 
-def test_prsi_query_is_expanded_for_retrieval():
+def test_payslip_deduction_queries_are_expanded_for_retrieval():
     from app.query_preprocessing import preprocess_query
 
-    enhanced, metadata = preprocess_query("what is PRSI?")
+    enhanced, metadata = preprocess_query("what is PAYE, PRSI and USC?")
+    enhanced_lower = enhanced.lower()
 
-    assert "pay related social insurance" in enhanced.lower()
+    assert "pay as you earn income tax" in enhanced_lower
+    assert "pay related social insurance" in enhanced_lower
+    assert "universal social charge" in enhanced_lower
+    assert "abbrev:paye" in metadata["expansions_used"]
     assert "abbrev:prsi" in metadata["expansions_used"]
+    assert "abbrev:usc" in metadata["expansions_used"]
 
 
-def test_prsi_rerank_boosts_exact_prsi_sources():
+def test_payslip_deduction_rerank_boosts_exact_sources():
     from app.main import MINIMUM_RELEVANCE_SCORE, rerank_matches
 
     matches = [{
@@ -111,14 +121,14 @@ def test_prsi_rerank_boosts_exact_prsi_sources():
         "metadata": {
             "display_name": "Ci Payslips",
             "doc_type": "guide",
-            "text": "PRSI EE means Pay Related Social Insurance paid by the employee.",
+            "text": "PRSI means Pay Related Social Insurance. USC means Universal Social Charge.",
         },
     }]
 
     reranked = rerank_matches(
         matches,
-        "what is pay related social insurance?",
-        original_query="what is PRSI?",
+        "what is pay related social insurance and universal social charge?",
+        original_query="what is PRSI and USC?",
     )
 
     assert reranked[0]["score"] >= MINIMUM_RELEVANCE_SCORE

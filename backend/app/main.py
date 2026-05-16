@@ -168,6 +168,42 @@ TAX_PATTERNS = [
     "net pay", "after tax",
 ]
 
+PAYSLIP_DEDUCTION_TERMS = [
+    "paye",
+    "pay as you earn",
+    "usc",
+    "universal social charge",
+    "prsi",
+    "pay related social insurance",
+]
+
+TAX_CALCULATION_TERMS = [
+    "after tax",
+    "band",
+    "bands",
+    "bracket",
+    "brackets",
+    "calculate",
+    "calculator",
+    "credit",
+    "credits",
+    "gross to net",
+    "how much",
+    "net pay",
+    "rate",
+    "rates",
+    "refund",
+    "relief",
+    "return",
+    "take home",
+]
+
+DEFINITION_QUESTION_RE = re.compile(
+    r"^(?:(?:hi|hello|hey|hiya)[,\s]+)?"
+    r"(?:what(?:'s| is| are)|what does|what do|explain|define|tell me about|meaning of)\b",
+    re.IGNORECASE,
+)
+
 TAX_RESPONSE = (
     "Tax is quite individual and depends on your income, marital status, credits, and reliefs — "
     "so I'm not the best tool for calculating your specific tax.\n\n"
@@ -179,10 +215,23 @@ TAX_RESPONSE = (
     "not getting a payslip, or being underpaid — I can definitely help with that."
 )
 
+def contains_any_term(text: str, terms: List[str]) -> bool:
+    return any(re.search(rf"\b{re.escape(term)}\b", text) for term in terms)
+
+
 def check_out_of_scope(message: str) -> str | None:
     """Check if the message is about a topic we should redirect rather than retrieve."""
     lower = message.strip().lower()
-    if any(p in lower for p in TAX_PATTERNS):
+    lower = re.sub(r"\s+", " ", lower)
+    has_payslip_deduction_term = contains_any_term(lower, PAYSLIP_DEDUCTION_TERMS)
+    asks_for_calculation = contains_any_term(lower, TAX_CALCULATION_TERMS)
+    if has_payslip_deduction_term and not asks_for_calculation:
+        if DEFINITION_QUESTION_RE.search(lower):
+            return None
+        if "payslip" in lower and contains_any_term(lower, ["mean", "means", "deduction", "deductions", "abbreviation"]):
+            return None
+
+    if contains_any_term(lower, TAX_PATTERNS):
         return TAX_RESPONSE
     return None
 
@@ -518,7 +567,7 @@ def rerank_matches(
         meta = match.get("metadata", {})
         title = (meta.get("display_name") or meta.get("title") or "").lower()
         doc_type = (meta.get("doc_type") or "").lower()
-        text = (meta.get("text") or meta.get("content") or "").lower()[:500]
+        text = (meta.get("text") or meta.get("content") or "").lower()[:1200]
         boost = 0.0
         
         # 1. Title keyword match — strongest signal.
@@ -573,11 +622,17 @@ def rerank_matches(
             if kw in q and dtype == doc_type:
                 boost += b
 
-        if (
-            ("prsi" in orig_q or "pay related social insurance" in q)
-            and ("prsi" in title or "prsi" in text or "pay related social insurance" in text)
-        ):
-            boost += 0.06
+        deduction_term_groups = [
+            (["paye", "pay as you earn"], ["paye", "pay as you earn"]),
+            (["prsi", "pay related social insurance"], ["prsi", "pay related social insurance"]),
+            (["usc", "universal social charge"], ["usc", "universal social charge"]),
+        ]
+        for query_terms, source_terms in deduction_term_groups:
+            if (
+                (contains_any_term(orig_q, query_terms) or contains_any_term(q, query_terms))
+                and (contains_any_term(title, source_terms) or contains_any_term(text, source_terms))
+            ):
+                boost += 0.10
         
         # 3. Penalise generic catch-all documents when specific ones exist
         #    e.g. "Safety Representatives Resource Book" is 600+ pages covering everything
