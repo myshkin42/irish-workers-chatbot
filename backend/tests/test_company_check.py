@@ -1,3 +1,4 @@
+import json
 from datetime import timedelta
 
 import pytest
@@ -15,11 +16,12 @@ def test_lookup_store_happy_path_and_expiry():
     assert store.get(lookup_id) is None
 
 
-def test_company_check_missing_config(monkeypatch):
+def test_company_check_missing_config(monkeypatch, tmp_path):
     from app import main
 
     monkeypatch.setattr(main, "COMPANY_CHECK_API_URL", "")
     monkeypatch.setattr(main, "COMPANY_CHECK_API_TOKEN", "")
+    monkeypatch.setattr(main, "LOG_DIR", tmp_path)
 
     client = TestClient(main.app)
     response = client.post("/api/company-check", json={"company": "Tesco Ireland"})
@@ -27,8 +29,17 @@ def test_company_check_missing_config(monkeypatch):
     assert response.status_code == 503
     assert response.json()["detail"] == "Company check is not configured for this deployment."
 
+    entries = [
+        json.loads(line)
+        for line in (tmp_path / "queries.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[-1]["event"] == "company_check"
+    assert entries[-1]["company"] == "Tesco Ireland"
+    assert entries[-1]["status"] == "error"
+    assert entries[-1]["error"] == "not_configured"
 
-def test_company_check_proxy_happy_path(monkeypatch):
+
+def test_company_check_proxy_happy_path(monkeypatch, tmp_path):
     from app import main
 
     class FakeResponse:
@@ -63,6 +74,7 @@ def test_company_check_proxy_happy_path(monkeypatch):
     monkeypatch.setattr(main, "COMPANY_CHECK_API_URL", "https://example.test")
     monkeypatch.setattr(main, "COMPANY_CHECK_API_TOKEN", "secret-token")
     monkeypatch.setattr(main.httpx, "AsyncClient", FakeAsyncClient)
+    monkeypatch.setattr(main, "LOG_DIR", tmp_path)
 
     client = TestClient(main.app)
     response = client.post("/api/company-check", json={"company": "Tesco Ireland"})
@@ -72,6 +84,17 @@ def test_company_check_proxy_happy_path(monkeypatch):
     assert body["lookup_id"]
     assert body["result"]["company"] == "Tesco Ireland"
     assert main.lookup_store.get(body["lookup_id"]) == body["result"]
+
+    entries = [
+        json.loads(line)
+        for line in (tmp_path / "queries.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert entries[-1]["event"] == "company_check"
+    assert entries[-1]["company"] == "Tesco Ireland"
+    assert entries[-1]["status"] == "success"
+    assert entries[-1]["lookup_id"] == body["lookup_id"]
+    assert entries[-1]["total_records"] == 1
+    assert entries[-1]["decision_records"] == 1
 
 
 def lookup_result(records, partial_results=False):

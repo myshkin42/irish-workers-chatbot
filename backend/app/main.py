@@ -6,7 +6,7 @@ import os
 import asyncio
 import re
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import FastAPI, HTTPException, Body, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -34,28 +34,72 @@ from .lookup_store import LookupStore
 # ----------------------------------------------------------------------------
 LOG_DIR = Path("/data/logs")
 
+def utc_now_iso() -> str:
+    return datetime.now(UTC).isoformat()
+
+
+def write_log_entry(entry: dict[str, Any]) -> None:
+    """Append a structured event to the durable JSONL log."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        log_file = LOG_DIR / "queries.jsonl"
+        with open(log_file, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception as e:
+        print(f"[LOG] Failed to write log: {e}")
+
+
 def log_query(message: str, answer: str, sources: list, best_score: float,
               tier: str, has_good_sources: bool, context_used: str = None,
               lookup_id: str | None = None):
     """Log query and response to a JSON lines file. One line per interaction."""
-    try:
-        LOG_DIR.mkdir(parents=True, exist_ok=True)
-        log_file = LOG_DIR / "queries.jsonl"
-        entry = {
-            "timestamp": datetime.utcnow().isoformat(),
-            "message": message,
-            "answer": answer[:500],  # Truncate to keep logs manageable
-            "sources": [s.get("title", "?") for s in sources[:3]],
-            "best_score": round(best_score, 3),
-            "tier": tier,
-            "has_good_sources": has_good_sources,
-            "context_query": context_used,
-            "lookup_id": lookup_id,
-        }
-        with open(log_file, "a") as f:
-            f.write(json.dumps(entry) + "\n")
-    except Exception as e:
-        print(f"[LOG] Failed to write log: {e}")
+    write_log_entry({
+        "timestamp": utc_now_iso(),
+        "event": "chat",
+        "message": message,
+        "answer": answer[:500],  # Truncate to keep logs manageable
+        "sources": [s.get("title", "?") for s in sources[:3]],
+        "best_score": round(best_score, 3),
+        "tier": tier,
+        "has_good_sources": has_good_sources,
+        "context_query": context_used,
+        "lookup_id": lookup_id,
+    })
+
+
+def log_company_check(
+    company: str,
+    *,
+    lookup_id: str | None = None,
+    result: dict[str, Any] | None = None,
+    include_mentions: bool | None = None,
+    limit: int | None = None,
+    status: str = "success",
+    error: str | None = None,
+) -> None:
+    """Log public-record checks without storing the full returned records."""
+    summary = (result or {}).get("summary") or {}
+    write_log_entry({
+        "timestamp": utc_now_iso(),
+        "event": "company_check",
+        "company": company,
+        "lookup_id": lookup_id,
+        "status": status,
+        "error": error,
+        "include_mentions": include_mentions,
+        "limit": limit,
+        "total_records": summary.get("total_records"),
+        "hsa_prosecutions": summary.get("hsa_prosecutions"),
+        "decision_records": summary.get(
+            "decision_records",
+            (summary.get("wrc_decisions") or 0)
+            + (summary.get("labour_court_records") or 0)
+            + (summary.get("eat_records") or 0)
+            + (summary.get("equality_records") or 0),
+        ),
+        "partial_results": (result or {}).get("partial_results"),
+        "elapsed_ms": (result or {}).get("elapsed_ms"),
+    })
 
 # ----------------------------------------------------------------------------
 # Security & Metadata
@@ -1003,6 +1047,13 @@ async def company_check(
     _: bool = Depends(verify_token)
 ):
     if not COMPANY_CHECK_API_URL or not COMPANY_CHECK_API_TOKEN:
+        log_company_check(
+            payload.company,
+            include_mentions=payload.include_mentions,
+            limit=payload.limit,
+            status="error",
+            error="not_configured",
+        )
         raise HTTPException(status_code=503, detail="Company check is not configured for this deployment.")
 
     try:
@@ -1020,10 +1071,24 @@ async def company_check(
             result = response.json()
     except httpx.HTTPError as exc:
         print(f"[COMPANY-CHECK] Upstream lookup failed for '{payload.company[:60]}': {exc}")
+        log_company_check(
+            payload.company,
+            include_mentions=payload.include_mentions,
+            limit=payload.limit,
+            status="error",
+            error=str(exc)[:300],
+        )
         raise HTTPException(status_code=503, detail="Lookup service is temporarily unavailable")
 
     lookup_id = lookup_store.store(result)
     summary = result.get("summary", {})
+    log_company_check(
+        payload.company,
+        lookup_id=lookup_id,
+        result=result,
+        include_mentions=payload.include_mentions,
+        limit=payload.limit,
+    )
     print(json.dumps({
         "event": "company_check",
         "company": payload.company,
@@ -1268,7 +1333,7 @@ async def submit_feedback(request: Request, payload: FeedbackRequest):
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         log_file = LOG_DIR / "feedback.jsonl"
         entry = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": utc_now_iso(),
             "message": payload.message,
             "answer": payload.answer[:500],
             "feedback": payload.feedback,
