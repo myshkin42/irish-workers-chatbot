@@ -370,11 +370,11 @@ ACTIVE_RECORDS_PATTERNS = [
 ]
 
 PASSIVE_COMPANY_PATTERNS = [
-    r"\bi\s+work\s+(?:at|for|with)\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
-    r"\bworking\s+(?:at|for|with)\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
-    r"\bat\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
-    r"\bwith\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
-    r"\bmy\s+employer\s+is\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im)\b|[?.!,;:]|$)",
+    r"\bi\s+work\s+(?:at|for|with)\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im|says?|told|tells|wants?|requires?|makes?|made|has|have|had|is|are|was|were|will|would|does|doesn't|doesnt)\b|[?.!,;:]|$)",
+    r"\bworking\s+(?:at|for|with)\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im|says?|told|tells|wants?|requires?|makes?|made|has|have|had|is|are|was|were|will|would|does|doesn't|doesnt)\b|[?.!,;:]|$)",
+    r"\bat\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im|says?|told|tells|wants?|requires?|makes?|made|has|have|had|is|are|was|were|will|would|does|doesn't|doesnt)\b|[?.!,;:]|$)",
+    r"\bwith\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im|says?|told|tells|wants?|requires?|makes?|made|has|have|had|is|are|was|were|will|would|does|doesn't|doesnt)\b|[?.!,;:]|$)",
+    r"\bmy\s+employer\s+is\s+(?P<company>.+?)(?:\s+(?:and|but|because|can|could|should|am|i'm|im|says?|told|tells|wants?|requires?|makes?|made|has|have|had|is|are|was|were|will|would|does|doesn't|doesnt)\b|[?.!,;:]|$)",
 ]
 
 

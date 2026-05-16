@@ -163,6 +163,10 @@ def test_records_redirect_classifier_is_conservative():
         "category": RECORDS_REDIRECT_PASSIVE,
         "company": "Tesco",
     }
+    assert classify_records_redirect("My boss at Dunnes Stores says I have to work every Sunday") == {
+        "category": RECORDS_REDIRECT_PASSIVE,
+        "company": "Dunnes Stores",
+    }
     assert classify_records_redirect("Has Tesco been prosecuted?") == {
         "category": RECORDS_REDIRECT_ACTIVE,
         "company": "Tesco",
