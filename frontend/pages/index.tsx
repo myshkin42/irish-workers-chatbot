@@ -110,7 +110,9 @@ export default function Home() {
   const [companyResult, setCompanyResult] = useState<CompanyCheckResult | null>(null);
   const [lookupId, setLookupId] = useState<string | null>(null);
   const [lookupExpired, setLookupExpired] = useState(false);
+  const messageRefs = useRef<Array<HTMLDivElement | null>>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const previousMessageCountRef = useRef(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Fetch metadata on mount
@@ -121,10 +123,40 @@ export default function Home() {
       .catch(console.error);
   }, []);
 
-  // Auto-scroll to bottom
+  // Keep new assistant replies anchored at their start; user messages still advance to the bottom.
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (messages.length === 0) {
+      previousMessageCountRef.current = 0;
+      return;
+    }
+
+    const lastIndex = messages.length - 1;
+    const lastMessage = messages[lastIndex];
+    const previousCount = previousMessageCountRef.current;
+    previousMessageCountRef.current = messages.length;
+
+    if (messages.length < previousCount) {
+      return;
+    }
+
+    const target = messageRefs.current[lastIndex];
+    if (!target) {
+      return;
+    }
+
+    window.requestAnimationFrame(() => {
+      target.scrollIntoView({
+        behavior: 'smooth',
+        block: lastMessage.role === 'assistant' ? 'start' : 'end',
+      });
+    });
   }, [messages]);
+
+  useEffect(() => {
+    if (loading) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    }
+  }, [loading]);
 
   // Close sidebar on resize to desktop
   useEffect(() => {
@@ -296,14 +328,22 @@ export default function Home() {
 
       {/* DISCLAIMER BANNER */}
       <header className="disclaimer-banner">
-        <div className="disclaimer-content">
+        <div className="disclaimer-content disclaimer-content-full">
           <strong>⚠️ Important:</strong> {metadata?.disclaimer || 
             'This chatbot provides general information only, not legal advice. Consult the WRC, a solicitor, or your union for specific situations.'}
         </div>
+        <div className="disclaimer-content disclaimer-content-compact">
+          <strong>Important:</strong> General information only, not legal advice.
+        </div>
         {metadata?.time_limits_warning && (
-          <div className="time-limit-warning">
-            {metadata.time_limits_warning}
-          </div>
+          <>
+            <div className="time-limit-warning time-limit-full">
+              {metadata.time_limits_warning}
+            </div>
+            <div className="time-limit-warning time-limit-compact">
+              Most WRC complaints have a 6-month time limit.
+            </div>
+          </>
         )}
       </header>
 
@@ -314,14 +354,16 @@ export default function Home() {
             onClick={() => setMode('chat')}
             type="button"
           >
-            Ask a question
+            <span className="mode-label-full">Ask a question</span>
+            <span className="mode-label-short">Ask</span>
           </button>
           <button
             className={`mode-tab ${mode === 'company' ? 'active' : ''}`}
             onClick={() => setMode('company')}
             type="button"
           >
-            Check public records
+            <span className="mode-label-full">Check public records</span>
+            <span className="mode-label-short">Records</span>
           </button>
         </div>
       </div>
@@ -390,7 +432,7 @@ export default function Home() {
                 <line x1="3" y1="12" x2="21" y2="12"/>
                 <line x1="3" y1="18" x2="21" y2="18"/>
               </svg>
-              <span>Resources &amp; Contacts</span>
+              <span>Resources</span>
             </button>
           </div>
 
@@ -426,7 +468,13 @@ export default function Home() {
             )}
 
             {messages.map((msg, i) => (
-              <div key={i} className={`message ${msg.role}`}>
+              <div
+                key={i}
+                ref={(element) => {
+                  messageRefs.current[i] = element;
+                }}
+                className={`message ${msg.role}`}
+              >
                 <div className="message-content">
                   {msg.role === 'assistant' ? (
                     <ReactMarkdown>{msg.content}</ReactMarkdown>
@@ -718,6 +766,11 @@ export default function Home() {
           font-size: 14px;
           line-height: 1.4;
         }
+        .disclaimer-content-compact,
+        .time-limit-compact,
+        .mode-label-short {
+          display: none;
+        }
         .time-limit-warning {
           color: #721c24;
           font-weight: bold;
@@ -752,6 +805,7 @@ export default function Home() {
           font-weight: 600;
           color: #495057;
           cursor: pointer;
+          white-space: nowrap;
         }
         .mode-tab.active {
           background: #0d6efd;
@@ -885,6 +939,7 @@ export default function Home() {
           flex-direction: column;
           min-width: 0;
           min-height: 0;
+          background: #ffffff;
         }
         .chat-toolbar {
           display: flex;
@@ -922,6 +977,7 @@ export default function Home() {
           overflow-y: auto;
           padding: 20px;
           -webkit-overflow-scrolling: touch;
+          background: #ffffff;
         }
         .welcome-message {
           background: #f8f9fa;
@@ -954,6 +1010,7 @@ export default function Home() {
           border-radius: 12px;
           word-wrap: break-word;
           overflow-wrap: break-word;
+          scroll-margin-top: 12px;
         }
         .message.user {
           margin-left: auto;
@@ -1345,23 +1402,39 @@ export default function Home() {
         @media (max-width: 768px) {
           /* Disclaimer condenses */
           .disclaimer-banner {
-            padding: 8px 12px;
+            padding: 6px 10px;
           }
           .disclaimer-content {
             font-size: 12px;
+            line-height: 1.25;
+          }
+          .disclaimer-content-full,
+          .time-limit-full,
+          .mode-label-full {
+            display: none;
+          }
+          .disclaimer-content-compact,
+          .time-limit-compact {
+            display: block;
+          }
+          .mode-label-short {
+            display: inline;
           }
           .time-limit-warning {
             font-size: 11px;
+            margin-top: 3px;
+            line-height: 1.2;
           }
           .mode-toggle-wrap {
-            padding: 8px 12px;
+            padding: 6px 12px;
           }
           .mode-toggle {
             width: 100%;
           }
           .mode-tab {
             flex: 1;
-            padding: 9px 10px;
+            padding: 8px 10px;
+            font-size: 14px;
           }
 
           /* Sidebar becomes slide-out drawer */
@@ -1417,9 +1490,9 @@ export default function Home() {
           /* Mobile topbar with toggle */
           .mobile-topbar {
             display: flex;
-            padding: 8px 12px;
+            padding: 6px 12px;
             border-bottom: 1px solid #dee2e6;
-            background: #f8f9fa;
+            background: #ffffff;
             flex-shrink: 0;
           }
           .sidebar-toggle {
@@ -1429,12 +1502,12 @@ export default function Home() {
             background: white;
             border: 1px solid #dee2e6;
             border-radius: 6px;
-            padding: 8px 12px;
-            font-size: 14px;
+            padding: 7px 10px;
+            font-size: 13px;
             font-family: inherit;
             color: #0d6efd;
             cursor: pointer;
-            min-height: 40px;
+            min-height: 36px;
           }
           .sidebar-toggle svg {
             flex-shrink: 0;
@@ -1442,21 +1515,31 @@ export default function Home() {
 
           /* Chat messages wider on mobile */
           .message {
-            max-width: 90%;
+            max-width: 100%;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+            border-radius: 10px;
           }
 
           /* Welcome message adapts */
           .welcome-message {
-            padding: 20px;
-            margin: 0 4px;
+            padding: 16px;
+            margin: 0;
+            border-radius: 8px;
           }
           .welcome-message h2 {
-            font-size: 20px;
+            font-size: 18px;
+            margin-bottom: 10px;
+          }
+          .welcome-message p,
+          .welcome-message li {
+            font-size: 14px;
+            line-height: 1.35;
           }
 
           /* Messages area padding */
           .messages {
-            padding: 12px;
+            padding: 10px 12px 8px;
           }
           .chat-toolbar {
             padding: 8px 12px 0;
@@ -1466,7 +1549,7 @@ export default function Home() {
 
           /* Input area */
           .input-area {
-            padding: 12px;
+            padding: 10px 12px;
             gap: 8px;
           }
           .input-area input {
@@ -1478,8 +1561,7 @@ export default function Home() {
 
           /* Footer */
           .footer {
-            padding: 10px 12px;
-            font-size: 11px;
+            display: none;
           }
           .company-panel {
             padding: 12px;
