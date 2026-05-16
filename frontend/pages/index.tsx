@@ -507,7 +507,6 @@ export default function Home() {
                           {s.title}
                           {s.doc_type ? ` [${s.doc_type}]` : ''}
                           {s.section ? ` (${s.section})` : ''}
-                          {s.relevance ? ` • ${Math.round(s.relevance * 100)}% match` : ''}
                           {j < msg.sources!.length - 1 ? ' | ' : ''}
                         </span>
                       ))}
