@@ -310,6 +310,10 @@ def write_reports(
                 "failures": result.failures,
                 "warnings": result.warnings,
                 "elapsed_seconds": round(result.elapsed_seconds, 3),
+                "review_status": review_status(result),
+                "route_label": route_label(result),
+                "source_summary": source_summary(result),
+                "answer_preview": answer_preview(result),
                 "response": result.response,
                 "log_entry": result.log_entry,
                 "review_note": result.case.get("review_note"),
@@ -332,6 +336,170 @@ def summary(results: list[EvalResult]) -> dict[str, int]:
     }
 
 
+def compact_text(value: Any, limit: int = 160) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "..."
+
+
+def markdown_cell(value: Any, limit: int = 160) -> str:
+    text = compact_text(value, limit=limit)
+    return text.replace("|", "\\|")
+
+
+def review_status(result: EvalResult) -> str:
+    if result.failures:
+        return "FAIL"
+    if result.warnings:
+        return "WARN"
+    return "OK"
+
+
+def route_label(result: EvalResult) -> str:
+    response = result.response or {}
+    log_entry = result.log_entry or {}
+    tier = log_entry.get("tier") or "no-log"
+    redirect = response.get("redirect_category")
+    company = response.get("detected_company")
+    parts = [str(tier)]
+    if redirect and redirect != "none":
+        parts.append(str(redirect))
+    if company:
+        parts.append(str(company))
+    return " / ".join(parts)
+
+
+def source_summary(result: EvalResult, limit: int = 2) -> str:
+    titles = source_titles(result.response or {})
+    unique_titles = list(dict.fromkeys(titles))
+    if not unique_titles:
+        return "None"
+    summary_text = "; ".join(unique_titles[:limit])
+    if len(unique_titles) > limit:
+        summary_text += f"; +{len(unique_titles) - limit}"
+    return summary_text
+
+
+def answer_preview(result: EvalResult, limit: int = 220) -> str:
+    response = result.response or {}
+    return compact_text(response.get("answer", ""), limit=limit)
+
+
+def count_by_tier(results: list[EvalResult]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in results:
+        tier = str((result.log_entry or {}).get("tier") or "no-log")
+        counts[tier] = counts.get(tier, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def count_by_suite(results: list[EvalResult]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for result in results:
+        for suite in result.case.get("suite", []):
+            counts[str(suite)] = counts.get(str(suite), 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def render_counts_table(title: str, counts: dict[str, int]) -> list[str]:
+    if not counts:
+        return []
+    lines = [f"## {title}", "", "| Name | Count |", "| --- | ---: |"]
+    lines.extend([f"| `{markdown_cell(name, 80)}` | {count} |" for name, count in counts.items()])
+    lines.append("")
+    return lines
+
+
+def render_failure_index(results: list[EvalResult]) -> list[str]:
+    failures = [result for result in results if result.failures]
+    if not failures:
+        return ["## Needs Attention", "", "No automated failures.", ""]
+
+    lines = ["## Needs Attention", "", "| Case | Failures |", "| --- | --- |"]
+    for result in failures:
+        case_id = result.case.get("id")
+        joined = "; ".join(result.failures)
+        lines.append(f"| `{markdown_cell(case_id, 80)}` | {markdown_cell(joined, 260)} |")
+    lines.append("")
+    return lines
+
+
+def render_review_table(results: list[EvalResult]) -> list[str]:
+    lines = [
+        "## Review Table",
+        "",
+        "Use the **Human Grade** column while eyeballing answers: `good`, `acceptable`, `wrong-source`, `too-vague`, `unsafe`, `tone-issue`, `routing-issue`.",
+        "",
+        "| Status | Human Grade | Case | Route | Sources | Prompt | Answer Preview |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for result in results:
+        case_id = result.case.get("id")
+        lines.append(
+            "| "
+            f"{review_status(result)} | "
+            "TODO | "
+            f"`{markdown_cell(case_id, 80)}` | "
+            f"{markdown_cell(route_label(result), 120)} | "
+            f"{markdown_cell(source_summary(result), 140)} | "
+            f"{markdown_cell(result.case.get('message'), 150)} | "
+            f"{markdown_cell(answer_preview(result), 240)} |"
+        )
+    lines.append("")
+    return lines
+
+
+def render_case_detail(result: EvalResult) -> list[str]:
+    case = result.case
+    response = result.response or {}
+    log_entry = result.log_entry or {}
+    status = review_status(result)
+    lines = [
+        f"## {status} `{case.get('id')}`",
+        "",
+        "Human review: `[ ] good` `[ ] acceptable` `[ ] wrong-source` `[ ] too-vague` `[ ] unsafe` `[ ] tone-issue` `[ ] routing-issue`",
+        "",
+        "Reviewer notes:",
+        "",
+        "> ",
+        "",
+        f"Suites: `{', '.join(case.get('suite', []))}`",
+        "",
+        f"Prompt: {case.get('message')}",
+        "",
+    ]
+    if case.get("review_note"):
+        lines.extend([f"Review note: {case['review_note']}", ""])
+    if result.failures:
+        lines.append("Failures:")
+        lines.extend([f"- {failure}" for failure in result.failures])
+        lines.append("")
+    if result.warnings:
+        lines.append("Warnings:")
+        lines.extend([f"- {warning}" for warning in result.warnings])
+        lines.append("")
+
+    lines.extend([
+        "Routing:",
+        f"- authoritative: `{response.get('has_authoritative_sources')}`",
+        f"- redirect_category: `{response.get('redirect_category')}`",
+        f"- detected_company: `{response.get('detected_company')}`",
+        f"- log_tier: `{log_entry.get('tier')}`",
+        f"- rewritten_query: `{log_entry.get('rewritten_query')}`",
+        "",
+    ])
+
+    titles = source_titles(response)
+    lines.append("Sources:")
+    if titles:
+        lines.extend([f"- {title}" for title in titles])
+    else:
+        lines.append("- None")
+    lines.extend(["", "Answer:", "", "```text", str(response.get("answer", "")).strip(), "```", ""])
+    return lines
+
+
 def render_markdown(results: list[EvalResult], base_url: str) -> str:
     totals = summary(results)
     lines = [
@@ -343,47 +511,14 @@ def render_markdown(results: list[EvalResult], base_url: str) -> str:
         "",
     ]
 
+    lines.extend(render_failure_index(results))
+    lines.extend(render_review_table(results))
+    lines.extend(render_counts_table("Tier Summary", count_by_tier(results)))
+    lines.extend(render_counts_table("Suite Coverage", count_by_suite(results)))
+    lines.extend(["# Detailed Answers", ""])
+
     for result in results:
-        case = result.case
-        response = result.response or {}
-        log_entry = result.log_entry or {}
-        status = "PASS" if result.passed else "FAIL"
-        lines.extend([
-            f"## {status} `{case.get('id')}`",
-            "",
-            f"Suites: `{', '.join(case.get('suite', []))}`",
-            "",
-            f"Prompt: {case.get('message')}",
-            "",
-        ])
-        if case.get("review_note"):
-            lines.extend([f"Review note: {case['review_note']}", ""])
-        if result.failures:
-            lines.append("Failures:")
-            lines.extend([f"- {failure}" for failure in result.failures])
-            lines.append("")
-        if result.warnings:
-            lines.append("Warnings:")
-            lines.extend([f"- {warning}" for warning in result.warnings])
-            lines.append("")
-
-        lines.extend([
-            "Routing:",
-            f"- authoritative: `{response.get('has_authoritative_sources')}`",
-            f"- redirect_category: `{response.get('redirect_category')}`",
-            f"- detected_company: `{response.get('detected_company')}`",
-            f"- log_tier: `{log_entry.get('tier')}`",
-            f"- rewritten_query: `{log_entry.get('rewritten_query')}`",
-            "",
-        ])
-
-        titles = source_titles(response)
-        lines.append("Sources:")
-        if titles:
-            lines.extend([f"- {title}" for title in titles])
-        else:
-            lines.append("- None")
-        lines.extend(["", "Answer:", "", "```text", str(response.get("answer", "")).strip(), "```", ""])
+        lines.extend(render_case_detail(result))
 
     return "\n".join(lines)
 

@@ -46,6 +46,9 @@ python scripts/run_chat_evals.py --suite smoke --health
 # Run the full human-review eval set against a local backend
 python scripts/run_chat_evals.py --health
 
+# Reports are written to evals/reports/ with a review table first,
+# followed by detailed answers and manual grading checkboxes.
+
 # Run post-deploy live smoke checks
 python scripts/smoke_live.py
 
