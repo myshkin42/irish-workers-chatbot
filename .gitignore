@@ -14,6 +14,8 @@ __pycache__/
 *.pyc
 *.egg-info/
 backend/evals/reports/
+frontend/playwright-report/
+frontend/test-results/
 
 # Data (too large for git, vectors already in Pinecone)
 data/documents/

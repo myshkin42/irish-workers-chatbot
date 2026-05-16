@@ -42,6 +42,22 @@ npm run dev
 
 Then open http://localhost:3000
 
+## Browser Smoke Tests
+
+The Playwright smoke tests run the real frontend in a browser and mock backend API responses. They cover core user flows without depending on live API timing or live public-record data.
+
+```bash
+npm run test:e2e
+npm run test:e2e:headed   # watch the browser while tests run
+npm run test:e2e:report   # open the last HTML report
+```
+
+The first run may need Playwright browsers installed:
+
+```bash
+npx playwright install chromium
+```
+
 ## Production Build
 
 ```bash

@@ -399,6 +399,7 @@ export default function Home() {
             className={`mode-tab ${mode === 'chat' ? 'active' : ''}`}
             onClick={() => setMode('chat')}
             type="button"
+            data-testid="chat-tab"
           >
             <span className="mode-label-full">Ask a question</span>
             <span className="mode-label-short">Ask</span>
@@ -407,6 +408,7 @@ export default function Home() {
             className={`mode-tab ${mode === 'company' ? 'active' : ''}`}
             onClick={() => setMode('company')}
             type="button"
+            data-testid="records-tab"
           >
             <span className="mode-label-full">Check public records</span>
             <span className="mode-label-short">Records</span>
@@ -497,7 +499,7 @@ export default function Home() {
             )}
           </div>
 
-          <div className="messages">
+          <div className="messages" data-testid="messages">
             {messages.length === 0 && (
               <div className="welcome-message">
                 <h2>Irish Workers&apos; Rights Chatbot</h2>
@@ -520,6 +522,7 @@ export default function Home() {
                   messageRefs.current[i] = element;
                 }}
                 className={`message ${msg.role}`}
+                data-testid={`message-${msg.role}`}
               >
                 <div className="message-content">
                   {msg.role === 'assistant' ? (
@@ -548,6 +551,7 @@ export default function Home() {
                   <div className="records-redirect-card">
                     <button
                       type="button"
+                      data-testid="records-redirect-button"
                       onClick={() => openRecordsFromRedirect(
                         msg.detectedCompany!,
                         messages[i - 1]?.content || ''
@@ -641,8 +645,9 @@ export default function Home() {
               onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
               placeholder="Ask about your employment rights..."
               disabled={loading}
+              data-testid="chat-input"
             />
-            <button onClick={sendMessage} disabled={loading || !input.trim()}>
+            <button onClick={sendMessage} disabled={loading || !input.trim()} data-testid="send-button">
               Send
             </button>
           </div>
@@ -679,8 +684,9 @@ export default function Home() {
                   onKeyDown={(e) => e.key === 'Enter' && runCompanyCheck()}
                   placeholder="e.g. Tesco Ireland Limited"
                   disabled={companyLoading}
+                  data-testid="company-input"
                 />
-                <button onClick={runCompanyCheck} disabled={companyLoading || companyName.trim().length < 2} type="button">
+                <button onClick={runCompanyCheck} disabled={companyLoading || companyName.trim().length < 2} type="button" data-testid="company-check-button">
                   {companyLoading ? 'Checking...' : 'Check'}
                 </button>
               </div>
@@ -698,7 +704,7 @@ export default function Home() {
             </section>
 
             {companyResult && (
-              <section className="company-results">
+              <section className="company-results" data-testid="company-results">
                 <h2>
                   Found {companyResult.summary.total_records} public records for &quot;{companyResult.company}&quot;:
                 </h2>
@@ -771,7 +777,7 @@ export default function Home() {
                     The chatbot can help explain the records, what the case types involve, and what your options are if
                     you want to take this further. The chatbot will know about the records you just looked up.
                   </p>
-                  <button onClick={openChatWithResults} disabled={!lookupId} type="button">
+                  <button onClick={openChatWithResults} disabled={!lookupId} type="button" data-testid="open-chat-with-results">
                     Open chat with these results
                   </button>
                 </div>
