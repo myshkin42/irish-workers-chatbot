@@ -27,6 +27,12 @@ const DECISION_KICKERS: Record<DecisionSource, string> = {
   unknown: 'DECISION RECORD'
 };
 
+const MATCH_LABELS: Record<'high' | 'medium' | 'low', string> = {
+  high: 'Name match',
+  medium: 'Likely match',
+  low: 'Mention'
+};
+
 const isDecisionSource = (source: CompanyRecord['source']): source is DecisionSource => source !== 'hsa';
 
 interface Message {
@@ -601,7 +607,7 @@ export default function Home() {
                 <div className="record-list">
                   {companyResult.records.map((record, i) => (
                     <article key={`${record.source}-${record.case_number || record.company_name}-${i}`} className={`record-card ${record.source}`}>
-                      <span className={`confidence-badge ${record.confidence}`}>{record.confidence}</span>
+                      <span className={`confidence-badge ${record.confidence}`}>{MATCH_LABELS[record.confidence]}</span>
                       {isDecisionSource(record.source) ? (
                         <>
                           <p className="record-kicker">{DECISION_KICKERS[record.source]}</p>
