@@ -287,6 +287,46 @@ def test_nonsense_falls_back_to_clarification_after_rewrite(monkeypatch):
     assert calls["logs"][-1]["tier2_reason"] == "floor"
 
 
+def test_tier2_rewrite_refusal_is_not_embedded(monkeypatch):
+    from app import main
+
+    calls = {"searches": [], "logs": []}
+    refusal = (
+        "I'm unable to rewrite this query using Irish employment law terminology, "
+        "as it does not contain a recognizable worker question. Please provide a clear question."
+    )
+
+    async def fake_search(query):
+        calls["searches"].append(query)
+        return [], 0.10
+
+    async def fake_rewrite(query):
+        return refusal
+
+    async def fake_generate_response(**kwargs):
+        raise AssertionError("generate_response should not run for final Tier 3 fallback")
+
+    def fake_log_query(*args, **kwargs):
+        calls["logs"].append({"tier": kwargs.get("tier", args[4] if len(args) > 4 else None), **kwargs})
+
+    monkeypatch.setattr(main, "search_knowledge_base", fake_search)
+    monkeypatch.setattr(main, "tier2_rewrite_query", fake_rewrite)
+    monkeypatch.setattr(main, "generate_response", fake_generate_response)
+    monkeypatch.setattr(main, "log_query", fake_log_query)
+
+    client = TestClient(main.app)
+    response = client.post("/chat", json={"message": "asdfghjkl", "history": []})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["has_authoritative_sources"] is False
+    assert "could you give me a bit more detail" in body["answer"]
+    assert calls["searches"] == ["asdfghjkl"]
+    assert calls["logs"][-1]["tier"] == "tier3"
+    assert calls["logs"][-1]["rewritten_query"] == refusal
+    assert calls["logs"][-1]["tier2_reason"] == "floor"
+
+
 def test_tier1_success_does_not_invoke_rewrite(monkeypatch):
     from app import main
 

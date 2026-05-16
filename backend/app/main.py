@@ -730,6 +730,25 @@ async def tier2_rewrite_query(query: str) -> str:
     return rewritten
 
 
+def is_unusable_tier2_rewrite(rewritten: str) -> bool:
+    """Detect rewrite refusals/explanations that should not be embedded."""
+    lower = rewritten.lower()
+    refusal_markers = [
+        "cannot rewrite",
+        "can't rewrite",
+        "unable to rewrite",
+        "not a meaningful worker question",
+        "not contain a recognizable worker question",
+        "does not contain a recognizable worker question",
+        "does not contain a coherent worker question",
+        "does not contain a clear employment",
+        "please provide a clear",
+        "please provide an actual",
+        "please provide a legitimate",
+    ]
+    return any(marker in lower for marker in refusal_markers)
+
+
 # ----------------------------------------------------------------------------
 # Post-retrieval re-ranking
 # ----------------------------------------------------------------------------
@@ -1417,8 +1436,12 @@ async def chat(
             tier2_invoked = True
             tier2_reason = "floor"
             rewritten_query = await tier2_rewrite_query(payload.message)
-            matches, tier2_raw_score = await search_knowledge_base(rewritten_query)
-            rerank_query = rewritten_query
+            if is_unusable_tier2_rewrite(rewritten_query):
+                print("[TIER2] Rewrite was not usable - skipping rewritten retrieval")
+                matches, tier2_raw_score = [], 0.0
+            else:
+                matches, tier2_raw_score = await search_knowledge_base(rewritten_query)
+                rerank_query = rewritten_query
             print(f"[TIER2] Floor rewrite raw: {tier2_raw_score:.3f}")
         
         # 4. Re-rank matches (nudge better-fit documents to top)
@@ -1444,14 +1467,18 @@ async def chat(
             tier2_invoked = True
             tier2_reason = "threshold"
             rewritten_query = await tier2_rewrite_query(payload.message)
-            matches, tier2_raw_score = await search_knowledge_base(rewritten_query)
-            rerank_query = rewritten_query
-            if matches:
-                matches = rerank_matches(
-                    matches,
-                    rerank_query,
-                    original_query=contextual_message,
-                )
+            if is_unusable_tier2_rewrite(rewritten_query):
+                print("[TIER2] Rewrite was not usable - skipping rewritten retrieval")
+                matches, tier2_raw_score = [], 0.0
+            else:
+                matches, tier2_raw_score = await search_knowledge_base(rewritten_query)
+                rerank_query = rewritten_query
+                if matches:
+                    matches = rerank_matches(
+                        matches,
+                        rerank_query,
+                        original_query=contextual_message,
+                    )
             good_matches = [m for m in matches if m["score"] >= MINIMUM_RELEVANCE_SCORE]
             has_good_sources = len(good_matches) > 0
             print(f"[TIER2] Threshold rewrite raw: {tier2_raw_score:.3f} -> good sources: {has_good_sources}")

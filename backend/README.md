@@ -23,6 +23,9 @@ uvicorn app.main:app --reload --port 8000
 | `app/reingest.py` | Single-document re-ingestion for updates |
 | `app/check_currency.py` | Monthly URL monitor for source changes |
 | `app/test_retrieval.py` | Retrieval regression test suite |
+| `evals/chat_eval_cases.json` | Human-review chat eval set with lightweight automated checks |
+| `scripts/run_chat_evals.py` | Runs selected eval cases and writes Markdown/JSON reports |
+| `scripts/smoke_live.py` | Post-deploy live smoke check for health, chat, logs, and records proxy |
 | `app/config.py` | Environment variable configuration |
 | `UPDATE_CALENDAR.md` | Annual schedule for content updates |
 
@@ -36,6 +39,15 @@ uvicorn app.main:app --reload --port 8000
 python -m app.test_retrieval
 python -m app.test_retrieval -v                      # verbose
 python -m app.test_retrieval -q "your query here"    # single query
+
+# Run the curated smoke evals against a local backend
+python scripts/run_chat_evals.py --suite smoke --health
+
+# Run the full human-review eval set against a local backend
+python scripts/run_chat_evals.py --health
+
+# Run post-deploy live smoke checks
+python scripts/smoke_live.py
 
 # Ingest full corpus
 python -m app.ingest ../data/documents/en

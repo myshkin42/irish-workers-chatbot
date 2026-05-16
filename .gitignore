@@ -13,6 +13,7 @@ venv/
 __pycache__/
 *.pyc
 *.egg-info/
+backend/evals/reports/
 
 # Data (too large for git, vectors already in Pinecone)
 data/documents/
