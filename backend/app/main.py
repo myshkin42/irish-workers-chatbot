@@ -53,7 +53,9 @@ def log_query(message: str, answer: str, sources: list, best_score: float,
               tier: str, has_good_sources: bool, context_used: str = None,
               lookup_id: str | None = None,
               redirect_category: str = "none",
-              detected_company: str | None = None):
+              detected_company: str | None = None,
+              rewritten_query: str | None = None,
+              tier2_reason: str | None = None):
     """Log query and response to a JSON lines file. One line per interaction."""
     write_log_entry({
         "timestamp": utc_now_iso(),
@@ -68,6 +70,8 @@ def log_query(message: str, answer: str, sources: list, best_score: float,
         "lookup_id": lookup_id,
         "redirect_category": redirect_category,
         "detected_company": detected_company,
+        "rewritten_query": rewritten_query,
+        "tier2_reason": tier2_reason,
     })
 
 
@@ -931,7 +935,7 @@ async def generate_response(
     context: str,
     history: List[Message],
     has_good_sources: bool,
-    lookup_context: str | None = None
+    lookup_context: str | None = None,
 ) -> str:
     """
     Generate response using Claude.
@@ -1399,24 +1403,76 @@ async def chat(
         #    Returns all matches above Tier 2 floor (0.45) — threshold
         #    filtering happens AFTER re-ranking so boosts can help.
         matches, best_raw_score = await search_knowledge_base(enhanced_query)
+        rerank_query = enhanced_query
+        tier2_invoked = False
+        tier2_reason = None
+        rewritten_query = None
+        tier2_raw_score = None
         
-        # 3. Tier 3: If raw score below floor, ask for clarification.
-        #    Lookup-attached chats still go to generation so Claude can use
-        #    the company-check context without letting that context affect retrieval.
+        # 3. Tier 2: If raw score is below floor, rewrite before giving up.
+        #    Lookup-attached chats keep the previous behavior: weak retrieval should
+        #    not prevent Claude from using the company-check context.
         if best_raw_score < TIER2_FLOOR and not lookup_context:
-            print(f"[TIER3] Score {best_raw_score:.3f} below floor - asking for clarification")
+            print(f"[TIER2] Raw score {best_raw_score:.3f} below floor - attempting LLM rewrite")
+            tier2_invoked = True
+            tier2_reason = "floor"
+            rewritten_query = await tier2_rewrite_query(payload.message)
+            matches, tier2_raw_score = await search_knowledge_base(rewritten_query)
+            rerank_query = rewritten_query
+            print(f"[TIER2] Floor rewrite raw: {tier2_raw_score:.3f}")
+        
+        # 4. Re-rank matches (nudge better-fit documents to top)
+        #    enhanced_query is used for embedding-aware boosts (topic-type lookups).
+        #    contextual_message is used as original_query for title-keyword overlap,
+        #    so preprocessing-added legislative words (act/benefit/protection) don't
+        #    spuriously match legislation titles via the title-overlap boost.
+        if matches:
+            matches = rerank_matches(
+                matches,
+                rerank_query,
+                original_query=contextual_message,
+            )
+        
+        # 5. Apply relevance threshold AFTER re-ranking
+        #    Boosts can push borderline-but-correct matches over the line
+        good_matches = [m for m in matches if m["score"] >= MINIMUM_RELEVANCE_SCORE]
+        has_good_sources = len(good_matches) > 0
+        
+        # 6. Tier 2: If initial re-ranking still has no good sources, try LLM rewrite.
+        if not has_good_sources and not tier2_invoked:
+            print(f"[TIER2] No matches above threshold after rerank (best raw: {best_raw_score:.3f}) - attempting LLM rewrite")
+            tier2_invoked = True
+            tier2_reason = "threshold"
+            rewritten_query = await tier2_rewrite_query(payload.message)
+            matches, tier2_raw_score = await search_knowledge_base(rewritten_query)
+            rerank_query = rewritten_query
+            if matches:
+                matches = rerank_matches(
+                    matches,
+                    rerank_query,
+                    original_query=contextual_message,
+                )
+            good_matches = [m for m in matches if m["score"] >= MINIMUM_RELEVANCE_SCORE]
+            has_good_sources = len(good_matches) > 0
+            print(f"[TIER2] Threshold rewrite raw: {tier2_raw_score:.3f} -> good sources: {has_good_sources}")
+
+        if not has_good_sources and not lookup_context:
+            best_failed_score = matches[0]["score"] if matches else (tier2_raw_score if tier2_raw_score is not None else best_raw_score)
+            print(f"[TIER3] No good sources after retrieval attempts - asking for clarification")
             clarification = "I'd like to help, but could you give me a bit more detail about your situation? For example, are you asking about pay, working hours, leave, dismissal, or something else? The more specific you can be, the better I can point you to the right information."
             log_query(
                 payload.message,
                 clarification,
                 [],
-                best_raw_score,
+                best_failed_score,
                 "tier3",
                 False,
                 context_used=contextual_message if contextual_message != payload.message else None,
                 lookup_id=payload.lookup_id,
                 redirect_category=redirect_category,
                 detected_company=detected_company,
+                rewritten_query=rewritten_query,
+                tier2_reason=tier2_reason,
             )
             return ChatResponse(
                 answer=clarification,
@@ -1428,44 +1484,26 @@ async def chat(
                 detected_company=detected_company,
             )
         
-        # 4. Re-rank matches (nudge better-fit documents to top)
-        #    enhanced_query is used for embedding-aware boosts (topic-type lookups).
-        #    contextual_message is used as original_query for title-keyword overlap,
-        #    so preprocessing-added legislative words (act/benefit/protection) don't
-        #    spuriously match legislation titles via the title-overlap boost.
-        if matches:
-            matches = rerank_matches(
-                matches,
-                enhanced_query,
-                original_query=contextual_message,
-            )
-        
-        # 5. Apply relevance threshold AFTER re-ranking
-        #    Boosts can push borderline-but-correct matches over the line
-        good_matches = [m for m in matches if m["score"] >= MINIMUM_RELEVANCE_SCORE]
-        has_good_sources = len(good_matches) > 0
-        best_score = good_matches[0]["score"] if good_matches else best_raw_score
-        
-        # 6. Tier 2: If still no good sources after re-ranking, try LLM rewrite
-        if not has_good_sources:
-            print(f"[TIER2] No matches above threshold after rerank (best raw: {best_raw_score:.3f}) - attempting LLM rewrite")
-            rewritten_query = await tier2_rewrite_query(payload.message)
-            matches, new_raw_score = await search_knowledge_base(rewritten_query)
-            if matches:
-                matches = rerank_matches(matches, rewritten_query)
-            good_matches = [m for m in matches if m["score"] >= MINIMUM_RELEVANCE_SCORE]
-            has_good_sources = len(good_matches) > 0
-            print(f"[TIER2] Rewrite best raw: {new_raw_score:.3f} -> good sources: {has_good_sources}")
-        
         # Use good_matches from here on
         matches = good_matches if has_good_sources else matches[:3]  # fallback: show best we have
         
         # 7. Format context
         context = format_context(matches, has_good_sources)
         
-        # 8. Generate response (using ORIGINAL query so Claude sees natural language)
+        # 8. Generate response. If Tier 2 recovered sources, answer the rewritten
+        #    legal topic so broad conversational wording does not collapse back
+        #    into a clarification-only response.
+        generation_query = (
+            (
+                f"{payload.message}\n\n"
+                f"Answer this as a question about: {rewritten_query}. "
+                "Give a brief general answer from the sources before asking any follow-up."
+            )
+            if tier2_invoked and has_good_sources and rewritten_query
+            else payload.message
+        )
         answer = await generate_response(
-            query=payload.message,
+            query=generation_query,
             context=context,
             history=payload.history,
             has_good_sources=has_good_sources,
@@ -1488,7 +1526,12 @@ async def chat(
         official_links = select_official_links(payload.message)
         
         # 11. Log the query and response
-        tier = "tier1" if has_good_sources else "tier2"
+        if not tier2_invoked:
+            tier = "tier1" if has_good_sources else "tier1-no-sources"
+        elif tier2_reason == "floor":
+            tier = "tier2-from-floor"
+        else:
+            tier = "tier2-from-threshold"
         log_query(
             payload.message, answer, sources,
             best_score=matches[0]["score"] if matches else 0.0,
@@ -1497,6 +1540,8 @@ async def chat(
             lookup_id=payload.lookup_id,
             redirect_category=redirect_category,
             detected_company=detected_company,
+            rewritten_query=rewritten_query,
+            tier2_reason=tier2_reason,
         )
         
         return ChatResponse(
